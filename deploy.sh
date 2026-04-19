@@ -187,6 +187,13 @@ deploy_frontend() {
   yarn install
   yarn build
 
+  if [[ ! -f "$release_dir/.next/BUILD_ID" ]]; then
+    echo "ERROR: next build did not produce a production output (missing $release_dir/.next/BUILD_ID)."
+    echo "Check the yarn build log above (OOM, TypeScript errors, or disk full). Listing .next if present:"
+    ls -la "$release_dir/.next" 2>/dev/null || echo "  (no .next directory)"
+    exit 1
+  fi
+
   ln -sfn "$release_dir" "$WEB_ROOT/current"
   echo "Frontend current -> $(readlink -f "$WEB_ROOT/current")"
 
