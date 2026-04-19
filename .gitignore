@@ -1,0 +1,10 @@
+# Local / accidental secrets (scripts use server-side shared/.env only)
+.env
+.env.*
+*.pem
+*.key
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log
