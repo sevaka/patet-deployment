@@ -12,7 +12,7 @@ WEB_REPO="git@bitbucket.org:we-dotech/patet-website.git"
 API_BRANCH="sevak_develop"
 WEB_BRANCH="develop_intermediate"
 
-PM2_ECOSYSTEM="/var/www/deployment/ecosystem.config.js"
+PM2_ECOSYSTEM="/var/www/patet-deployment/ecosystem.config.js"
 
 BACKEND_HEALTH_URL="http://127.0.0.1:57303/api/v1/auth/me"
 FRONTEND_HEALTH_URL="http://127.0.0.1:4993/"
@@ -197,6 +197,6 @@ esac
 echo
 echo "Done."
 echo "Current backend:  $(readlink -f "$API_ROOT/current" 2>/dev/null || true)"
-echo "Current frontend: $(readlink -f "$WEB_ROOT/current" 2>/dev/null || true)k"
+echo "Current frontend: $(readlink -f "$WEB_ROOT/current" 2>/dev/null || true)"
 
 

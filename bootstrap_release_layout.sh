@@ -8,6 +8,7 @@ echo "Creating release layout..."
 
 mkdir -p "$API_ROOT/releases" "$API_ROOT/shared"
 mkdir -p "$WEB_ROOT/releases" "$WEB_ROOT/shared"
+mkdir -p "/var/www/patet-deployment"
 
 if [ -f "$API_ROOT/.env" ] && [ ! -f "$API_ROOT/shared/.env" ]; then
   cp "$API_ROOT/.env" "$API_ROOT/shared/.env"
@@ -22,7 +23,7 @@ fi
 echo
 echo "Done."
 echo "Next:"
-echo "1) put ecosystem.config.js into /var/www/deployment/"
+echo "1) put ecosystem.config.js into /var/www/patet-deployment/"
 echo "2) run deploy.sh backend"
 echo "3) run deploy.sh frontend"
 

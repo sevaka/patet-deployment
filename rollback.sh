@@ -6,7 +6,7 @@ TARGET_RELEASE="${2:-}"
 
 API_ROOT="/var/www/patet-api"
 WEB_ROOT="/var/www/patet-website"
-PM2_ECOSYSTEM="/var/www/deployment/ecosystem.config.js"
+PM2_ECOSYSTEM="/var/www/patet-deployment/ecosystem.config.js"
 
 BACKEND_HEALTH_URL="http://127.0.0.1:57303/api/v1/auth/me"
 FRONTEND_HEALTH_URL="http://127.0.0.1:4993/"
