@@ -64,7 +64,14 @@ verify_backend() {
 }
 
 verify_frontend() {
-  curl -fsS "$FRONTEND_HEALTH_URL" >/dev/null
+  echo "Verifying frontend"
+  echo "Manual check (same as this script): curl -fsS \"$FRONTEND_HEALTH_URL\""
+  if ! curl -fsS "$FRONTEND_HEALTH_URL" >/dev/null; then
+    echo "Frontend verification failed."
+    echo "Retry manually: curl -fsS \"$FRONTEND_HEALTH_URL\""
+    echo "With response headers: curl -fsSI \"$FRONTEND_HEALTH_URL\""
+    exit 1
+  fi
   echo "Frontend looks up."
 }
 
