@@ -54,6 +54,18 @@ timestamp() {
   date +"%Y-%m-%d_%H%M%S"
 }
 
+remove_non_yarn_lockfiles() {
+  local release_dir="$1"
+  local lockfile
+
+  for lockfile in "package-lock.json" "npm-shrinkwrap.json"; do
+    if [[ -f "$release_dir/$lockfile" ]]; then
+      echo "Removing $lockfile from release (Yarn-only installs)"
+      rm -f "$release_dir/$lockfile"
+    fi
+  done
+}
+
 cleanup_old_releases() {
   local root="$1"
   local keep="$2"
@@ -184,13 +196,39 @@ deploy_frontend() {
   symlink_shared_files "$WEB_ROOT/shared" "$release_dir" "${FRONTEND_SHARED_FILES[@]}"
 
   cd "$release_dir"
-  yarn install
-  yarn build
+  remove_non_yarn_lockfiles "$release_dir"
+
+  # Fresh output dir so a partial/corrupt .next from a killed build cannot pass as success.
+  rm -rf "$release_dir/.next"
+
+  export NODE_ENV=production
+  # On low-memory VPS builds can be SIGKILL'd mid-write; increase heap, e.g.:
+  #   export NEXT_BUILD_NODE_OPTIONS="--max-old-space-size=4096"
+  if [[ -n "${NEXT_BUILD_NODE_OPTIONS:-}" ]]; then
+    export NODE_OPTIONS="${NEXT_BUILD_NODE_OPTIONS}"
+  fi
+
+  yarn install --non-interactive
+
+  local build_rc=0
+  yarn build || build_rc=$?
+
+  if [[ "${build_rc:-0}" -ne 0 ]]; then
+    echo "ERROR: yarn build exited with code ${build_rc}. Fix compile/type errors above."
+    exit 1
+  fi
 
   if [[ ! -f "$release_dir/.next/BUILD_ID" ]]; then
     echo "ERROR: next build did not produce a production output (missing $release_dir/.next/BUILD_ID)."
-    echo "Check the yarn build log above (OOM, TypeScript errors, or disk full). Listing .next if present:"
+    echo "Typical causes: Linux OOM killer (check dmesg), disk full, or Node killed before finalize."
+    echo "Disk space:" && df -h "$release_dir" || true
+    echo "Memory:" && free -h 2>/dev/null || true
+    echo "Next.js version from package.json:"
+    node -p "require('./package.json').dependencies.next" 2>/dev/null || echo "  (could not read)"
+    echo "Listing .next if present:"
     ls -la "$release_dir/.next" 2>/dev/null || echo "  (no .next directory)"
+    echo "BUILD_ID search:"
+    find "$release_dir/.next" -name BUILD_ID -print 2>/dev/null || true
     exit 1
   fi
 
