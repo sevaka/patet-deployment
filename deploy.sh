@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=deploy-common.sh
+source "$SCRIPT_DIR/deploy-common.sh"
+
 COMPONENT="${1:-}"
 
 API_ROOT="/var/www/patet-api"
@@ -141,6 +145,7 @@ deploy_backend() {
   cleanup_old_releases "$API_ROOT" "$KEEP_RELEASES"
 
   echo "Backend deploy complete: $release_dir"
+  print_release_git_info "Backend (patet-api)" "$(readlink -f "$API_ROOT/current")"
 }
 
 symlink_shared_files() {
@@ -195,6 +200,7 @@ deploy_frontend() {
   cleanup_old_releases "$WEB_ROOT" "$KEEP_RELEASES"
 
   echo "Frontend deploy complete: $release_dir"
+  print_release_git_info "Frontend (patet-website)" "$(readlink -f "$WEB_ROOT/current")"
 }
 
 case "$COMPONENT" in
@@ -216,7 +222,5 @@ esac
 
 echo
 echo "Done."
-echo "Current backend:  $(readlink -f "$API_ROOT/current" 2>/dev/null || true)"
-echo "Current frontend: $(readlink -f "$WEB_ROOT/current" 2>/dev/null || true)"
 
 

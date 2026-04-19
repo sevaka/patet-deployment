@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=deploy-common.sh
+source "$SCRIPT_DIR/deploy-common.sh"
+
 COMPONENT="${1:-}"
 TARGET_RELEASE="${2:-}"
 
@@ -112,20 +116,24 @@ case "$COMPONENT" in
     log "Rolling back backend"
     rollback_one "$API_ROOT" "patet-api" "restart" "$TARGET_RELEASE"
     verify_backend
+    print_release_git_info "Backend (patet-api)" "$(readlink -f "$API_ROOT/current")"
     ;;
   frontend)
     log "Rolling back frontend"
     rollback_one "$WEB_ROOT" "patet-website" "reload" "$TARGET_RELEASE"
     verify_frontend
+    print_release_git_info "Frontend (patet-website)" "$(readlink -f "$WEB_ROOT/current")"
     ;;
   all)
     log "Rolling back backend"
     rollback_one "$API_ROOT" "patet-api" "restart" "$TARGET_RELEASE"
     verify_backend
+    print_release_git_info "Backend (patet-api)" "$(readlink -f "$API_ROOT/current")"
 
     log "Rolling back frontend"
     rollback_one "$WEB_ROOT" "patet-website" "reload" "$TARGET_RELEASE"
     verify_frontend
+    print_release_git_info "Frontend (patet-website)" "$(readlink -f "$WEB_ROOT/current")"
     ;;
   *)
     echo "Usage: $0 {backend|frontend|all} [release_name]"
