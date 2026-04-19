@@ -11,6 +11,9 @@ PM2_ECOSYSTEM="/var/www/patet-deployment/ecosystem.config.js"
 BACKEND_HEALTH_URL="http://127.0.0.1:57303/api/v1/auth/me"
 FRONTEND_HEALTH_URL="http://127.0.0.1:4993/"
 
+BACKEND_VERIFY_MAX_ATTEMPTS="${BACKEND_VERIFY_MAX_ATTEMPTS:-40}"
+BACKEND_VERIFY_SLEEP_SECS="${BACKEND_VERIFY_SLEEP_SECS:-2}"
+
 if [[ -z "$COMPONENT" ]]; then
   echo "Usage: $0 {backend|frontend|all} [release_name]"
   exit 1
@@ -39,13 +42,24 @@ get_previous_release() {
 }
 
 verify_backend() {
-  local code
-  code="$(curl -s -o /dev/null -w "%{http_code}" "$BACKEND_HEALTH_URL" || true)"
-  if [[ "$code" == "200" || "$code" == "401" ]]; then
-    echo "Backend looks up (HTTP $code)"
-    return 0
-  fi
-  echo "Backend verification failed. HTTP code: $code"
+  echo "Verifying backend (retry while HTTP 000 — app still starting)"
+  local attempt=1
+  local code=""
+  while [[ "$attempt" -le "$BACKEND_VERIFY_MAX_ATTEMPTS" ]]; do
+    code="$(
+      curl -sS -o /dev/null -w "%{http_code}" \
+        --connect-timeout 3 --max-time 10 \
+        "$BACKEND_HEALTH_URL" 2>/dev/null || true
+    )"
+    if [[ "$code" == "200" || "$code" == "401" ]]; then
+      echo "Backend looks up (HTTP $code) after attempt $attempt/$BACKEND_VERIFY_MAX_ATTEMPTS"
+      return 0
+    fi
+    echo "  ... not ready (HTTP ${code:-000}), attempt $attempt/$BACKEND_VERIFY_MAX_ATTEMPTS — sleeping ${BACKEND_VERIFY_SLEEP_SECS}s"
+    sleep "$BACKEND_VERIFY_SLEEP_SECS"
+    attempt=$((attempt + 1))
+  done
+  echo "Backend verification failed after $BACKEND_VERIFY_MAX_ATTEMPTS attempts. Last HTTP code: ${code:-000}"
   exit 1
 }
 
