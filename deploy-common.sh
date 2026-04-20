@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Shared helpers for deploy.sh and rollback.sh (source this file; do not execute directly).
 
-print_release_git_info() {
+# _build_release_git_info_lines <label> <repo_dir>
+# Echoes the release info lines (no surrounding separators) to stdout.
+_build_release_git_info_lines() {
   local label="$1"
   local repo_dir="${2:-}"
 
   if [[ -z "$repo_dir" || ! -e "$repo_dir" ]]; then
-    echo "==== $label release ===="
     echo "  (No directory path or path missing — skipping git info)"
     return 0
   fi
@@ -15,7 +16,6 @@ print_release_git_info() {
   resolved="$(readlink -f "$repo_dir" 2>/dev/null || echo "$repo_dir")"
 
   if [[ ! -d "$resolved/.git" ]]; then
-    echo "==== $label release ===="
     echo "  Directory: $resolved"
     echo "  (Not a git checkout — skipping SHA/subject)"
     return 0
@@ -23,7 +23,6 @@ print_release_git_info() {
 
   local sha short subject
   if ! sha="$(git -C "$resolved" rev-parse HEAD 2>/dev/null)"; then
-    echo "==== $label release ===="
     echo "  Directory: $resolved"
     echo "  (git rev-parse failed — skipping SHA/subject)"
     return 0
@@ -32,10 +31,30 @@ print_release_git_info() {
   short="$(git -C "$resolved" rev-parse --short HEAD 2>/dev/null || echo "?")"
   subject="$(git -C "$resolved" log -1 --format=%s 2>/dev/null || echo "?")"
 
-  echo "==== $label release ===="
   echo "  Directory: $resolved"
   echo "  Commit:    $short ($sha)"
   echo "  Subject:   $subject"
+}
+
+print_release_git_info() {
+  local label="$1"
+  local repo_dir="${2:-}"
+  echo "==== $label release ===="
+  _build_release_git_info_lines "$label" "$repo_dir"
+}
+
+# capture_release_git_info <varname> <label> <repo_dir>
+# Stores the full block (header + detail lines) into the named variable.
+capture_release_git_info() {
+  local _cri_var="$1"
+  local _cri_label="$2"
+  local _cri_dir="${3:-}"
+  local _cri_lines
+  _cri_lines="$(  
+    echo "==== $_cri_label release ===="
+    _build_release_git_info_lines "$_cri_label" "$_cri_dir"
+  )"
+  printf -v "$_cri_var" '%s' "$_cri_lines"
 }
 
 # Written after health verification. Key=value lines (no shell metacharacters in values).

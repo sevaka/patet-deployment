@@ -110,6 +110,12 @@ deploy_backend() {
   release="$(timestamp)"
   local release_dir="$API_ROOT/releases/$release"
 
+  # Snapshot the currently-running release BEFORE the symlink swap
+  local _old_backend_info
+  local _old_backend_dir
+  _old_backend_dir="$(readlink -f "$API_ROOT/current" 2>/dev/null || true)"
+  capture_release_git_info _old_backend_info "Backend (patet-api)" "$_old_backend_dir"
+
   log "Deploying backend release $release"
   git clone --branch "$API_BRANCH" --single-branch "$API_REPO" "$release_dir"
 
@@ -127,7 +133,7 @@ deploy_backend() {
   ln -sfn "$release_dir" "$API_ROOT/current"
   echo "Backend current -> $(readlink -f "$API_ROOT/current")"
 
-  if pm2 describe patet-api >/dev/null 2>&1; then
+  if pm2 describe patet-api > /dev/null 2>&1; then
     pm2 startOrRestart "$PM2_ECOSYSTEM" --only patet-api --update-env
   else
     pm2 start "$PM2_ECOSYSTEM" --only patet-api --update-env
@@ -138,7 +144,12 @@ deploy_backend() {
   cleanup_releases_keep_distinct_successful_sha "$API_ROOT" "$KEEP_DISTINCT_SUCCESSFUL_SHAS" backend
 
   echo "Backend deploy complete: $release_dir"
-  print_release_git_info "Backend (patet-api)" "$(readlink -f "$API_ROOT/current")"
+  echo
+  echo "==== Changed from: Backend (patet-api) release ===="
+  echo "$_old_backend_info" | grep -v '^====' || true
+  echo
+  echo "==== New Running: Backend (patet-api) release ===="
+  _build_release_git_info_lines "Backend (patet-api)" "$(readlink -f "$API_ROOT/current")"
 }
 
 symlink_shared_files() {
@@ -165,6 +176,12 @@ deploy_frontend() {
   local release
   release="$(timestamp)"
   local release_dir="$WEB_ROOT/releases/$release"
+
+  # Snapshot the currently-running release BEFORE the symlink swap
+  local _old_frontend_info
+  local _old_frontend_dir
+  _old_frontend_dir="$(readlink -f "$WEB_ROOT/current" 2>/dev/null || true)"
+  capture_release_git_info _old_frontend_info "Frontend (patet-website)" "$_old_frontend_dir"
 
   log "Deploying frontend release $release"
   git clone --branch "$WEB_BRANCH" --single-branch "$WEB_REPO" "$release_dir"
@@ -227,7 +244,12 @@ deploy_frontend() {
   cleanup_releases_keep_distinct_successful_sha "$WEB_ROOT" "$KEEP_DISTINCT_SUCCESSFUL_SHAS" frontend
 
   echo "Frontend deploy complete: $release_dir"
-  print_release_git_info "Frontend (patet-website)" "$(readlink -f "$WEB_ROOT/current")"
+  echo
+  echo "==== Changed from: Frontend (patet-website) release ===="
+  echo "$_old_frontend_info" | grep -v '^====' || true
+  echo
+  echo "==== New Running: Frontend (patet-website) release ===="
+  _build_release_git_info_lines "Frontend (patet-website)" "$(readlink -f "$WEB_ROOT/current")"
 }
 
 case "$COMPONENT" in
