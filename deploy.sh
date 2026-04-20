@@ -25,7 +25,7 @@ FRONTEND_HEALTH_URL="http://127.0.0.1:4993/"
 BACKEND_VERIFY_MAX_ATTEMPTS="${BACKEND_VERIFY_MAX_ATTEMPTS:-40}"
 BACKEND_VERIFY_SLEEP_SECS="${BACKEND_VERIFY_SLEEP_SECS:-2}"
 
-KEEP_RELEASES=5
+KEEP_DISTINCT_SUCCESSFUL_SHAS="${KEEP_DISTINCT_SUCCESSFUL_SHAS:-5}"
 
 BACKEND_SHARED_FILES=(
   ".env"
@@ -63,26 +63,6 @@ remove_non_yarn_lockfiles() {
       echo "Removing $lockfile from release (Yarn-only installs)"
       rm -f "$release_dir/$lockfile"
     fi
-  done
-}
-
-cleanup_old_releases() {
-  local root="$1"
-  local keep="$2"
-
-  if [ ! -d "$root/releases" ]; then
-    return 0
-  fi
-
-  mapfile -t releases < <(ls -1dt "$root"/releases/* 2>/dev/null || true)
-
-  if [ "${#releases[@]}" -le "$keep" ]; then
-    return 0
-  fi
-
-  for old in "${releases[@]:$keep}"; do
-    echo "Removing old release: $old"
-    rm -rf "$old"
   done
 }
 
@@ -154,7 +134,8 @@ deploy_backend() {
   fi
 
   verify_backend
-  cleanup_old_releases "$API_ROOT" "$KEEP_RELEASES"
+  write_patet_release_meta "$release_dir" backend
+  cleanup_releases_keep_distinct_successful_sha "$API_ROOT" "$KEEP_DISTINCT_SUCCESSFUL_SHAS" backend
 
   echo "Backend deploy complete: $release_dir"
   print_release_git_info "Backend (patet-api)" "$(readlink -f "$API_ROOT/current")"
@@ -242,7 +223,8 @@ deploy_frontend() {
   fi
 
   verify_frontend
-  cleanup_old_releases "$WEB_ROOT" "$KEEP_RELEASES"
+  write_patet_release_meta "$release_dir" frontend
+  cleanup_releases_keep_distinct_successful_sha "$WEB_ROOT" "$KEEP_DISTINCT_SUCCESSFUL_SHAS" frontend
 
   echo "Frontend deploy complete: $release_dir"
   print_release_git_info "Frontend (patet-website)" "$(readlink -f "$WEB_ROOT/current")"
