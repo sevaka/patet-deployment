@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=deploy-common.sh
 source "$SCRIPT_DIR/deploy-common.sh"
 
-COMPONENT="${1:-}"
+ACTION="${1:-}"
 TARGET_RELEASE="${2:-}"
 
 API_ROOT="/var/www/patet-api"
@@ -18,8 +18,24 @@ FRONTEND_HEALTH_URL="http://127.0.0.1:4993/"
 BACKEND_VERIFY_MAX_ATTEMPTS="${BACKEND_VERIFY_MAX_ATTEMPTS:-40}"
 BACKEND_VERIFY_SLEEP_SECS="${BACKEND_VERIFY_SLEEP_SECS:-2}"
 
-if [[ -z "$COMPONENT" ]]; then
-  echo "Usage: $0 {backend|frontend|all} [release_name]"
+rollback_usage() {
+  echo "Patet production rollback (point current at a release, PM2 restart/reload, verify)."
+  echo
+  echo "Usage: $0 {backend|frontend|all|status} [release_name_or_status_scope]"
+  echo "  Rollback: $0 backend|frontend|all [release_name]"
+  echo "  Status:   $0 status [backend|frontend|all]  — git SHA, dates, deploy meta for live release"
+  echo
+  echo "Options:"
+  echo "  -h, --help    Show this help and exit"
+}
+
+if [[ "$ACTION" == "-h" || "$ACTION" == "--help" ]]; then
+  rollback_usage
+  exit 0
+fi
+
+if [[ -z "$ACTION" ]]; then
+  rollback_usage
   exit 1
 fi
 
@@ -111,7 +127,7 @@ rollback_one() {
   fi
 }
 
-case "$COMPONENT" in
+case "$ACTION" in
   backend)
     log "Rolling back backend"
     rollback_one "$API_ROOT" "patet-api" "restart" "$TARGET_RELEASE"
@@ -135,8 +151,33 @@ case "$COMPONENT" in
     verify_frontend
     print_release_git_info "Frontend (patet-website)" "$(readlink -f "$WEB_ROOT/current")"
     ;;
+  status)
+    STATUS_SCOPE="${2:-all}"
+    case "$STATUS_SCOPE" in
+      backend)
+        print_patet_running_release "$API_ROOT" "Backend (patet-api)"
+        ;;
+      frontend)
+        print_patet_running_release "$WEB_ROOT" "Frontend (patet-website)"
+        ;;
+      all)
+        print_patet_running_release "$API_ROOT" "Backend (patet-api)"
+        print_patet_running_release "$WEB_ROOT" "Frontend (patet-website)"
+        ;;
+      *)
+        echo "Invalid status scope: $STATUS_SCOPE"
+        echo "Usage: $0 status [backend|frontend|all]"
+        rollback_usage
+        exit 1
+        ;;
+    esac
+    echo
+    echo "Done."
+    exit 0
+    ;;
   *)
-    echo "Usage: $0 {backend|frontend|all} [release_name]"
+    echo "Unknown action: $ACTION"
+    rollback_usage
     exit 1
     ;;
 esac

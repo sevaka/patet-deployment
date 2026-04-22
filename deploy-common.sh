@@ -57,6 +57,69 @@ capture_release_git_info() {
   printf -v "$_cri_var" '%s' "$_cri_lines"
 }
 
+# print_patet_running_release <app_root> <human_label>
+# Prints the live "current" release: timestamps, symlink target, .patet-release.meta, and git HEAD.
+print_patet_running_release() {
+  local root="$1"
+  local label="$2"
+  local current_path="$root/current"
+  local resolved
+  local meta
+  local line
+  local commit_iso
+  local branch_ref
+  local descr
+
+  echo
+  echo "==== $label — running release ===="
+  echo "  Queried at (UTC):   $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  echo "  Queried at (local): $(date +"%Y-%m-%dT%H:%M:%S%z")"
+
+  if [[ ! -e "$current_path" ]]; then
+    echo "  No active release: $current_path is missing"
+    return 0
+  fi
+
+  resolved="$(readlink -f "$current_path" 2>/dev/null || echo "$current_path")"
+  echo "  current -> $resolved"
+  echo "  Release id (folder): $(basename "$resolved")"
+
+  meta="$resolved/.patet-release.meta"
+  if [[ -f "$meta" ]]; then
+    echo "  Deploy record (.patet-release.meta):"
+    while IFS= read -r line || [[ -n "${line:-}" ]]; do
+      [[ -z "${line:-}" ]] && continue
+      echo "    $line"
+    done <"$meta"
+  else
+    echo "  Deploy record: (no $meta — older release or deploy predates meta file)"
+  fi
+
+  echo "  Git (checkout on disk):"
+  if ! command -v git >/dev/null 2>&1; then
+    echo "    (git not available)"
+    return 0
+  fi
+
+  _build_release_git_info_lines "$label" "$resolved" || true
+
+  if [[ -d "$resolved/.git" ]]; then
+    commit_iso="$(git -C "$resolved" log -1 --format=%cI 2>/dev/null || true)"
+    branch_ref="$(git -C "$resolved" symbolic-ref -q --short HEAD 2>/dev/null || true)"
+    if [[ -n "$commit_iso" ]]; then
+      echo "  Commit date (author, ISO): $commit_iso"
+    fi
+    if [[ -n "$branch_ref" ]]; then
+      echo "  Branch:                    $branch_ref"
+    else
+      descr="$(git -C "$resolved" describe --tags --always 2>/dev/null || true)"
+      if [[ -n "$descr" ]]; then
+        echo "  Describe:                  $descr"
+      fi
+    fi
+  fi
+}
+
 # Written after health verification. Key=value lines (no shell metacharacters in values).
 write_patet_release_meta() {
   local release_dir="$1"

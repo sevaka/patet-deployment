@@ -5,7 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=deploy-common.sh
 source "$SCRIPT_DIR/deploy-common.sh"
 
-COMPONENT="${1:-}"
+ACTION="${1:-}"
+STATUS_SCOPE="${2:-all}"
 
 API_ROOT="/var/www/patet-api"
 WEB_ROOT="/var/www/patet-website"
@@ -36,8 +37,24 @@ FRONTEND_SHARED_FILES=(
   ".env"
 )
 
-if [[ -z "$COMPONENT" ]]; then
-  echo "Usage: $0 {backend|frontend|all}"
+deploy_usage() {
+  echo "Patet production deploy (clone/build, swap current, PM2, health check)."
+  echo
+  echo "Usage: $0 {backend|frontend|all|status} [scope_for_status]"
+  echo "  Deploy: $0 backend|frontend|all"
+  echo "  Status: $0 status [backend|frontend|all]  — git SHA, commit date, deploy meta for live release"
+  echo
+  echo "Options:"
+  echo "  -h, --help    Show this help and exit"
+}
+
+if [[ "$ACTION" == "-h" || "$ACTION" == "--help" ]]; then
+  deploy_usage
+  exit 0
+fi
+
+if [[ -z "$ACTION" ]]; then
+  deploy_usage
   exit 1
 fi
 
@@ -252,7 +269,7 @@ deploy_frontend() {
   _build_release_git_info_lines "Frontend (patet-website)" "$(readlink -f "$WEB_ROOT/current")"
 }
 
-case "$COMPONENT" in
+case "$ACTION" in
   backend)
     deploy_backend
     ;;
@@ -263,8 +280,32 @@ case "$COMPONENT" in
     deploy_backend
     deploy_frontend
     ;;
+  status)
+    case "$STATUS_SCOPE" in
+      backend)
+        print_patet_running_release "$API_ROOT" "Backend (patet-api)"
+        ;;
+      frontend)
+        print_patet_running_release "$WEB_ROOT" "Frontend (patet-website)"
+        ;;
+      all)
+        print_patet_running_release "$API_ROOT" "Backend (patet-api)"
+        print_patet_running_release "$WEB_ROOT" "Frontend (patet-website)"
+        ;;
+      *)
+        echo "Invalid status scope: $STATUS_SCOPE"
+        echo "Usage: $0 status [backend|frontend|all]"
+        deploy_usage
+        exit 1
+        ;;
+    esac
+    echo
+    echo "Done."
+    exit 0
+    ;;
   *)
-    echo "Usage: $0 {backend|frontend|all}"
+    echo "Unknown action: $ACTION"
+    deploy_usage
     exit 1
     ;;
 esac
