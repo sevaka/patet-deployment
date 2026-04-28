@@ -267,13 +267,15 @@ release_is_successful_for_stack() {
 }
 
 # Keep live current symlink target plus newest successful dir per commit for the first N
-# distinct SHAs (newest-first SHA order). Requires Bash 4+ for associative arrays.
+# distinct SHAs (newest-first SHA order). Also always keep the stable-marked release dir
+# (shared/.patet-stable-release) if it exists, even when it would fall outside the top N.
+# Requires Bash 4+ for associative arrays.
 cleanup_releases_keep_distinct_successful_sha() {
   local root="$1"
   local keep_distinct="${2:-5}"
   local stack="$3"
   local releases_dir="$root/releases"
-  local current_real="" sorted dir real sha idx base all_bases
+  local current_real="" sorted dir real sha idx base all_bases stable_name stable_dir stable_real
 
   if [[ ! -d "$releases_dir" ]]; then
     return 0
@@ -318,6 +320,15 @@ cleanup_releases_keep_distinct_successful_sha() {
       keep_paths["$real"]=1
     fi
   done
+
+  # Never delete the release folder named in the stable marker (rollback safety).
+  if stable_name="$(get_stable_release_name "$root" 2>/dev/null)"; then
+    stable_dir="$releases_dir/$stable_name"
+    if [[ -d "$stable_dir" ]]; then
+      stable_real="$(readlink -f "$stable_dir" 2>/dev/null || echo "$stable_dir")"
+      keep_paths["$stable_real"]=1
+    fi
+  fi
 
   mapfile -t all_bases < <(ls -1 "$releases_dir" 2>/dev/null || true)
   for base in "${all_bases[@]}"; do
