@@ -75,6 +75,7 @@ choose_release_interactive() {
   local release_name
   local marker=""
   local tags=()
+  local sha sha_short
 
   mapfile -t releases < <(ls -1dt "$root"/releases/* 2>/dev/null || true)
   if [[ "${#releases[@]}" -eq 0 ]]; then
@@ -102,6 +103,10 @@ choose_release_interactive() {
   for release_path in "${releases[@]}"; do
     [[ -d "$release_path" ]] || continue
     release_name="$(basename "$release_path")"
+    sha_short="?"
+    if sha="$(release_read_commit_sha "$release_path" 2>/dev/null)"; then
+      sha_short="${sha:0:7}"
+    fi
     tags=()
     if [[ -n "$current_name" && "$release_name" == "$current_name" ]]; then
       tags+=("current")
@@ -111,9 +116,9 @@ choose_release_interactive() {
     fi
 
     if [[ "${#tags[@]}" -gt 0 ]]; then
-      echo "  [$idx] $release_name (${tags[*]})" >&2
+      echo "  [$idx] $release_name  $sha_short  (${tags[*]})" >&2
     else
-      echo "  [$idx] $release_name" >&2
+      echo "  [$idx] $release_name  $sha_short" >&2
     fi
 
     idx=$((idx + 1))
