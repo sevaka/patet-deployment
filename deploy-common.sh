@@ -43,6 +43,49 @@ print_release_git_info() {
   _build_release_git_info_lines "$label" "$repo_dir"
 }
 
+stable_marker_path() {
+  local root="$1"
+  echo "$root/shared/.patet-stable-release"
+}
+
+set_stable_release() {
+  local root="$1"
+  local release_name="$2"
+  local release_dir="$root/releases/$release_name"
+  local marker
+  local tmp
+
+  if [[ ! -d "$release_dir" ]]; then
+    echo "Stable release target does not exist: $release_dir" >&2
+    return 1
+  fi
+
+  marker="$(stable_marker_path "$root")"
+  mkdir -p "$(dirname "$marker")"
+  tmp="$(mktemp "${TMPDIR:-/tmp}/patet-stable-release.XXXXXX")"
+  printf '%s\n' "$release_name" >"$tmp"
+  mv -f "$tmp" "$marker"
+}
+
+get_stable_release_name() {
+  local root="$1"
+  local marker
+  local val
+
+  marker="$(stable_marker_path "$root")"
+  if [[ ! -f "$marker" ]]; then
+    return 1
+  fi
+
+  IFS= read -r val <"$marker" || true
+  val="${val//$'\r'/}"
+  if [[ -z "$val" ]]; then
+    return 1
+  fi
+
+  echo "$val"
+}
+
 # capture_release_git_info <varname> <label> <repo_dir>
 # Stores the full block (header + detail lines) into the named variable.
 capture_release_git_info() {
@@ -69,11 +112,25 @@ print_patet_running_release() {
   local commit_iso
   local branch_ref
   local descr
+  local stable_release=""
+  local marker
 
   echo
   echo "==== $label — running release ===="
   echo "  Queried at (UTC):   $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   echo "  Queried at (local): $(date +"%Y-%m-%dT%H:%M:%S%z")"
+
+  marker="$(stable_marker_path "$root")"
+  if stable_release="$(get_stable_release_name "$root" 2>/dev/null)"; then
+    if [[ -d "$root/releases/$stable_release" ]]; then
+      echo "  Stable release:      $stable_release"
+    else
+      echo "  Stable release:      $stable_release (missing on disk)"
+    fi
+  else
+    echo "  Stable release:      (not set)"
+  fi
+  echo "  Stable marker file:  $marker"
 
   if [[ ! -e "$current_path" ]]; then
     echo "  No active release: $current_path is missing"

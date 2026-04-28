@@ -21,8 +21,10 @@ BACKEND_VERIFY_SLEEP_SECS="${BACKEND_VERIFY_SLEEP_SECS:-2}"
 rollback_usage() {
   echo "Patet production rollback (point current at a release, PM2 restart/reload, verify)."
   echo
-  echo "Usage: $0 {backend|frontend|all|status} [release_name_or_status_scope]"
+  echo "Usage: $0 {backend|frontend|all|stable|status} [release_name_or_status_scope]"
   echo "  Rollback: $0 backend|frontend|all [release_name]"
+  echo "            If release_name is omitted in TTY mode, opens interactive selector."
+  echo "  Stable:   $0 stable backend|frontend|all [release_name|current]"
   echo "  Status:   $0 status [backend|frontend|all]  — git SHA, dates, deploy meta for live release"
   echo
   echo "Options:"
@@ -61,6 +63,87 @@ get_previous_release() {
   return 1
 }
 
+choose_release_interactive() {
+  local root="$1"
+  local label="$2"
+  local current_real
+  local current_name=""
+  local stable_name=""
+  local idx=1
+  local selected=""
+  local release_path
+  local release_name
+  local marker=""
+  local tags=()
+
+  mapfile -t releases < <(ls -1dt "$root"/releases/* 2>/dev/null || true)
+  if [[ "${#releases[@]}" -eq 0 ]]; then
+    echo "No releases found under $root/releases" >&2
+    return 1
+  fi
+
+  current_real="$(readlink -f "$root/current" 2>/dev/null || true)"
+  if [[ -n "$current_real" ]]; then
+    current_name="$(basename "$current_real")"
+  fi
+  stable_name="$(get_stable_release_name "$root" 2>/dev/null || true)"
+  marker="$(stable_marker_path "$root")"
+
+  echo
+  echo "Select rollback target for $label"
+  echo "  Stable marker: $marker"
+  if [[ -n "$stable_name" ]]; then
+    echo "  Stable release: $stable_name"
+  else
+    echo "  Stable release: (not set)"
+  fi
+  echo
+
+  for release_path in "${releases[@]}"; do
+    [[ -d "$release_path" ]] || continue
+    release_name="$(basename "$release_path")"
+    tags=()
+    if [[ -n "$current_name" && "$release_name" == "$current_name" ]]; then
+      tags+=("current")
+    fi
+    if [[ -n "$stable_name" && "$release_name" == "$stable_name" ]]; then
+      tags+=("stable")
+    fi
+
+    if [[ "${#tags[@]}" -gt 0 ]]; then
+      echo "  [$idx] $release_name (${tags[*]})"
+    else
+      echo "  [$idx] $release_name"
+    fi
+
+    idx=$((idx + 1))
+  done
+
+  echo
+  echo "Enter release number or exact release name."
+  while true; do
+    read -r -p "> " selected
+    selected="${selected//[$'\r\n']}"
+    if [[ -z "$selected" ]]; then
+      echo "Please select a release."
+      continue
+    fi
+    if [[ "$selected" =~ ^[0-9]+$ ]]; then
+      if [[ "$selected" -ge 1 && "$selected" -le "${#releases[@]}" ]]; then
+        basename "${releases[$((selected - 1))]}"
+        return 0
+      fi
+      echo "Invalid number: $selected"
+      continue
+    fi
+    if [[ -d "$root/releases/$selected" ]]; then
+      echo "$selected"
+      return 0
+    fi
+    echo "Release not found: $selected"
+  done
+}
+
 verify_backend() {
   echo "Verifying backend (retry while HTTP 000 — app still starting)"
   local attempt=1
@@ -97,9 +180,10 @@ verify_frontend() {
 
 rollback_one() {
   local root="$1"
-  local pm2_name="$2"
-  local mode="$3"
-  local release_name="$4"
+  local label="$2"
+  local pm2_name="$3"
+  local mode="$4"
+  local release_name="$5"
 
   local target
   if [[ -n "$release_name" ]]; then
@@ -108,6 +192,13 @@ rollback_one() {
       echo "Release not found: $target"
       exit 1
     fi
+  elif [[ -t 0 ]]; then
+    local selected
+    selected="$(choose_release_interactive "$root" "$label")" || {
+      echo "Interactive selection failed for $label"
+      exit 1
+    }
+    target="$root/releases/$selected"
   else
     local prev
     prev="$(get_previous_release "$root")" || {
@@ -127,29 +218,75 @@ rollback_one() {
   fi
 }
 
+mark_stable() {
+  local root="$1"
+  local label="$2"
+  local release_name="$3"
+  local resolved_release="$release_name"
+  local current_real
+
+  if [[ "$release_name" == "current" || -z "$release_name" ]]; then
+    current_real="$(readlink -f "$root/current" 2>/dev/null || true)"
+    if [[ -z "$current_real" || ! -d "$current_real" ]]; then
+      echo "Cannot mark stable for $label: current release is missing"
+      exit 1
+    fi
+    resolved_release="$(basename "$current_real")"
+  fi
+
+  set_stable_release "$root" "$resolved_release"
+  echo "Stable release for $label set to: $resolved_release"
+  echo "Marker file: $(stable_marker_path "$root")"
+}
+
 case "$ACTION" in
   backend)
     log "Rolling back backend"
-    rollback_one "$API_ROOT" "patet-api" "restart" "$TARGET_RELEASE"
+    rollback_one "$API_ROOT" "Backend (patet-api)" "patet-api" "restart" "$TARGET_RELEASE"
     verify_backend
     print_release_git_info "Backend (patet-api)" "$(readlink -f "$API_ROOT/current")"
     ;;
   frontend)
     log "Rolling back frontend"
-    rollback_one "$WEB_ROOT" "patet-website" "reload" "$TARGET_RELEASE"
+    rollback_one "$WEB_ROOT" "Frontend (patet-website)" "patet-website" "reload" "$TARGET_RELEASE"
     verify_frontend
     print_release_git_info "Frontend (patet-website)" "$(readlink -f "$WEB_ROOT/current")"
     ;;
   all)
     log "Rolling back backend"
-    rollback_one "$API_ROOT" "patet-api" "restart" "$TARGET_RELEASE"
+    rollback_one "$API_ROOT" "Backend (patet-api)" "patet-api" "restart" "$TARGET_RELEASE"
     verify_backend
     print_release_git_info "Backend (patet-api)" "$(readlink -f "$API_ROOT/current")"
 
     log "Rolling back frontend"
-    rollback_one "$WEB_ROOT" "patet-website" "reload" "$TARGET_RELEASE"
+    rollback_one "$WEB_ROOT" "Frontend (patet-website)" "patet-website" "reload" "$TARGET_RELEASE"
     verify_frontend
     print_release_git_info "Frontend (patet-website)" "$(readlink -f "$WEB_ROOT/current")"
+    ;;
+  stable)
+    STABLE_SCOPE="${2:-}"
+    STABLE_RELEASE="${3:-current}"
+    case "$STABLE_SCOPE" in
+      backend)
+        mark_stable "$API_ROOT" "Backend (patet-api)" "$STABLE_RELEASE"
+        ;;
+      frontend)
+        mark_stable "$WEB_ROOT" "Frontend (patet-website)" "$STABLE_RELEASE"
+        ;;
+      all)
+        mark_stable "$API_ROOT" "Backend (patet-api)" "$STABLE_RELEASE"
+        mark_stable "$WEB_ROOT" "Frontend (patet-website)" "$STABLE_RELEASE"
+        ;;
+      *)
+        echo "Invalid stable scope: ${STABLE_SCOPE:-<empty>}"
+        echo "Usage: $0 stable backend|frontend|all [release_name|current]"
+        rollback_usage
+        exit 1
+        ;;
+    esac
+    echo
+    echo "Done."
+    exit 0
     ;;
   status)
     STATUS_SCOPE="${2:-all}"
