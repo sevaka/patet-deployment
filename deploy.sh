@@ -68,7 +68,7 @@ log() {
 }
 
 timestamp() {
-  date +"%Y-%m-%d_%H%M%S"
+  TZ=Asia/Yerevan date +"%Y-%m-%d_%H%M%S"
 }
 
 remove_non_yarn_lockfiles() {
