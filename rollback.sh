@@ -89,15 +89,15 @@ choose_release_interactive() {
   stable_name="$(get_stable_release_name "$root" 2>/dev/null || true)"
   marker="$(stable_marker_path "$root")"
 
-  echo
-  echo "Select rollback target for $label"
-  echo "  Stable marker: $marker"
+  echo >&2
+  echo "Select rollback target for $label" >&2
+  echo "  Stable marker: $marker" >&2
   if [[ -n "$stable_name" ]]; then
-    echo "  Stable release: $stable_name"
+    echo "  Stable release: $stable_name" >&2
   else
-    echo "  Stable release: (not set)"
+    echo "  Stable release: (not set)" >&2
   fi
-  echo
+  echo >&2
 
   for release_path in "${releases[@]}"; do
     [[ -d "$release_path" ]] || continue
@@ -111,21 +111,21 @@ choose_release_interactive() {
     fi
 
     if [[ "${#tags[@]}" -gt 0 ]]; then
-      echo "  [$idx] $release_name (${tags[*]})"
+      echo "  [$idx] $release_name (${tags[*]})" >&2
     else
-      echo "  [$idx] $release_name"
+      echo "  [$idx] $release_name" >&2
     fi
 
     idx=$((idx + 1))
   done
 
-  echo
-  echo "Enter release number or exact release name."
+  echo >&2
+  echo "Enter release number or exact release name." >&2
   while true; do
     read -r -p "> " selected
     selected="${selected//[$'\r\n']}"
     if [[ -z "$selected" ]]; then
-      echo "Please select a release."
+      echo "Please select a release." >&2
       continue
     fi
     if [[ "$selected" =~ ^[0-9]+$ ]]; then
@@ -133,14 +133,14 @@ choose_release_interactive() {
         basename "${releases[$((selected - 1))]}"
         return 0
       fi
-      echo "Invalid number: $selected"
+      echo "Invalid number: $selected" >&2
       continue
     fi
     if [[ -d "$root/releases/$selected" ]]; then
       echo "$selected"
       return 0
     fi
-    echo "Release not found: $selected"
+    echo "Release not found: $selected" >&2
   done
 }
 
