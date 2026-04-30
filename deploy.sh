@@ -22,7 +22,7 @@ PM2_ECOSYSTEM="/var/www/patet-deployment/ecosystem.config.js"
 BACKEND_HEALTH_URL="http://127.0.0.1:57303/api/v1/auth/me"
 FRONTEND_HEALTH_URL="http://127.0.0.1:4993/"
 
-# After pm2 restart, Nest may not listen immediately; curl then reports HTTP 000 (connection failed).
+# After pm2 reload/start, Nest may not listen immediately; curl then reports HTTP 000 (connection failed).
 BACKEND_VERIFY_MAX_ATTEMPTS="${BACKEND_VERIFY_MAX_ATTEMPTS:-40}"
 BACKEND_VERIFY_SLEEP_SECS="${BACKEND_VERIFY_SLEEP_SECS:-2}"
 
@@ -151,7 +151,7 @@ deploy_backend() {
   echo "Backend current -> $(readlink -f "$API_ROOT/current")"
 
   if pm2 describe patet-api > /dev/null 2>&1; then
-    pm2 startOrRestart "$PM2_ECOSYSTEM" --only patet-api --update-env
+    pm2 reload "$PM2_ECOSYSTEM" --only patet-api --update-env
   else
     pm2 start "$PM2_ECOSYSTEM" --only patet-api --update-env
   fi
