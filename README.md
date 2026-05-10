@@ -33,7 +33,7 @@ After this, routine deploys use `./deploy.sh backend`, which updates `/var/www/p
 ### Deploy and rollback behavior
 
 - **`deploy.sh frontend`** updates `/var/www/patet-website/current` after `yarn build`, then runs **`pm2 startOrReload`** for `patet-website` (cluster-friendly reload when the app already exists).
-- **`rollback.sh`** (frontend or `all`) uses **`pm2 reload`** when the process exists (same rolling idea as the backend section).
+- **`rollback.sh`** (frontend or `all`) uses **`pm2 reload`** when the process exists (same rolling idea as the backend section). From an interactive shell, `./rollback.sh` with no args opens a menu (list / set stable / rollback) with numbered selections.
 
 ### One-time recreate on production (optional)
 
@@ -51,5 +51,5 @@ Routine deploys: `./deploy.sh frontend`.
 ## Related scripts
 
 - `deploy.sh` — clone/build releases, symlink `current`, PM2 reload/start (backend reload; frontend `startOrReload`)
-- `rollback.sh` — point `current` at a release, PM2 reload/start
+- `rollback.sh` — point `current` at a release, PM2 reload/start. On a TTY, run `./rollback.sh` with **no arguments** for an interactive menu (list releases with current/stable flags, set stable marker, or rollback) using numbered choices only; `backend|frontend|all|stable|status` with explicit arguments still work for automation.
 - `migrate_backend.sh` — run TypeORM migrations from `current`

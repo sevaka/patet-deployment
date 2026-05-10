@@ -22,6 +22,7 @@ rollback_usage() {
   echo "Patet production rollback (point current at a release, PM2 restart/reload, verify)."
   echo
   echo "Usage: $0 {backend|frontend|all|stable|status} [release_name_or_status_scope]"
+  echo "  Interactive menu: $0   (TTY only — List / Set stable / Rollback, all via numbered choices)"
   echo "  Rollback: $0 backend|frontend|all [release_name]"
   echo "            If release_name is omitted in TTY mode, opens interactive selector."
   echo "  Stable:   $0 stable backend|frontend|all [release_name|current]"
@@ -34,11 +35,6 @@ rollback_usage() {
 if [[ "$ACTION" == "-h" || "$ACTION" == "--help" ]]; then
   rollback_usage
   exit 0
-fi
-
-if [[ -z "$ACTION" ]]; then
-  rollback_usage
-  exit 1
 fi
 
 log() {
@@ -63,24 +59,39 @@ get_previous_release() {
   return 1
 }
 
-choose_release_interactive() {
+# Fills array name in $2 with absolute release dir paths, newest first (directories only).
+patet_mapfile_release_dirs() {
+  local root="$1"
+  local -n _patet_out="$2"
+  local -a _raw
+  local p
+  _patet_out=()
+  mapfile -t _raw < <(ls -1dt "$root"/releases/* 2>/dev/null || true)
+  for p in "${_raw[@]}"; do
+    [[ -d "$p" ]] && _patet_out+=("$p")
+  done
+}
+
+# Prints release table to stdout (newest first, current / stable tags).
+list_releases_table() {
   local root="$1"
   local label="$2"
   local current_real
   local current_name=""
   local stable_name=""
   local idx=1
-  local selected=""
   local release_path
   local release_name
   local marker=""
   local tags=()
-  local sha sha_short
+  local sha
+  local sha_short
+  local -a releases
 
-  mapfile -t releases < <(ls -1dt "$root"/releases/* 2>/dev/null || true)
+  patet_mapfile_release_dirs "$root" releases
   if [[ "${#releases[@]}" -eq 0 ]]; then
-    echo "No releases found under $root/releases" >&2
-    return 1
+    echo "No releases found under $root/releases"
+    return 0
   fi
 
   current_real="$(readlink -f "$root/current" 2>/dev/null || true)"
@@ -90,18 +101,16 @@ choose_release_interactive() {
   stable_name="$(get_stable_release_name "$root" 2>/dev/null || true)"
   marker="$(stable_marker_path "$root")"
 
-  echo >&2
-  echo "Select rollback target for $label" >&2
-  echo "  Stable marker: $marker" >&2
+  echo "==== $label — releases on disk (newest first) ===="
+  echo "  Stable marker: $marker"
   if [[ -n "$stable_name" ]]; then
-    echo "  Stable release: $stable_name" >&2
+    echo "  Marked stable: $stable_name"
   else
-    echo "  Stable release: (not set)" >&2
+    echo "  Marked stable: (not set)"
   fi
-  echo >&2
+  echo
 
   for release_path in "${releases[@]}"; do
-    [[ -d "$release_path" ]] || continue
     release_name="$(basename "$release_path")"
     sha_short="?"
     if sha="$(release_read_commit_sha "$release_path" 2>/dev/null)"; then
@@ -116,21 +125,38 @@ choose_release_interactive() {
     fi
 
     if [[ "${#tags[@]}" -gt 0 ]]; then
-      echo "  [$idx] $release_name  $sha_short  (${tags[*]})" >&2
+      echo "  [$idx] $release_name  $sha_short  (${tags[*]})"
     else
-      echo "  [$idx] $release_name  $sha_short" >&2
+      echo "  [$idx] $release_name  $sha_short"
     fi
 
     idx=$((idx + 1))
   done
+  echo
+}
+
+choose_release_interactive() {
+  local root="$1"
+  local label="$2"
+  local selected=""
+  local -a releases
+
+  patet_mapfile_release_dirs "$root" releases
+  if [[ "${#releases[@]}" -eq 0 ]]; then
+    echo "No releases found under $root/releases" >&2
+    return 1
+  fi
 
   echo >&2
-  echo "Enter release number or exact release name." >&2
+  echo "Select release for $label" >&2
+  list_releases_table "$root" "$label" >&2
+
+  echo "Enter the release number (1-${#releases[@]})." >&2
   while true; do
     read -r -p "> " selected
     selected="${selected//[$'\r\n']}"
     if [[ -z "$selected" ]]; then
-      echo "Please select a release." >&2
+      echo "Please enter a number." >&2
       continue
     fi
     if [[ "$selected" =~ ^[0-9]+$ ]]; then
@@ -138,14 +164,41 @@ choose_release_interactive() {
         basename "${releases[$((selected - 1))]}"
         return 0
       fi
-      echo "Invalid number: $selected" >&2
+      echo "Invalid number: $selected (valid: 1-${#releases[@]})" >&2
       continue
     fi
-    if [[ -d "$root/releases/$selected" ]]; then
-      echo "$selected"
-      return 0
-    fi
-    echo "Release not found: $selected" >&2
+    echo "Enter only the list number, not a release name." >&2
+  done
+}
+
+# Echoes: backend | frontend | both
+choose_scope_interactive() {
+  echo "Select scope:" >&2
+  echo "  [1] Backend (patet-api)" >&2
+  echo "  [2] Frontend (patet-website)" >&2
+  echo "  [3] Both (backend + frontend — two release picks)" >&2
+  echo >&2
+  local c=""
+  while true; do
+    read -r -p "Enter choice (1-3): " c
+    c="${c//[$'\r\n']}"
+    case "$c" in
+      1)
+        echo "backend"
+        return 0
+        ;;
+      2)
+        echo "frontend"
+        return 0
+        ;;
+      3)
+        echo "both"
+        return 0
+        ;;
+      *)
+        echo "Invalid choice. Enter 1, 2, or 3." >&2
+        ;;
+    esac
   done
 }
 
@@ -244,6 +297,129 @@ mark_stable() {
   echo "Marker file: $(stable_marker_path "$root")"
 }
 
+interactive_list_flow() {
+  local scope
+  scope="$(choose_scope_interactive)" || return 1
+  case "$scope" in
+    backend)
+      list_releases_table "$API_ROOT" "Backend (patet-api)"
+      print_patet_running_release "$API_ROOT" "Backend (patet-api)"
+      ;;
+    frontend)
+      list_releases_table "$WEB_ROOT" "Frontend (patet-website)"
+      print_patet_running_release "$WEB_ROOT" "Frontend (patet-website)"
+      ;;
+    both)
+      list_releases_table "$API_ROOT" "Backend (patet-api)"
+      print_patet_running_release "$API_ROOT" "Backend (patet-api)"
+      list_releases_table "$WEB_ROOT" "Frontend (patet-website)"
+      print_patet_running_release "$WEB_ROOT" "Frontend (patet-website)"
+      ;;
+  esac
+  echo
+  echo "Done."
+}
+
+interactive_stable_flow() {
+  local scope
+  local rel_b rel_f
+  scope="$(choose_scope_interactive)" || return 1
+  case "$scope" in
+    backend)
+      rel_b="$(choose_release_interactive "$API_ROOT" "Backend (patet-api)")" || return 1
+      mark_stable "$API_ROOT" "Backend (patet-api)" "$rel_b"
+      ;;
+    frontend)
+      rel_f="$(choose_release_interactive "$WEB_ROOT" "Frontend (patet-website)")" || return 1
+      mark_stable "$WEB_ROOT" "Frontend (patet-website)" "$rel_f"
+      ;;
+    both)
+      rel_b="$(choose_release_interactive "$API_ROOT" "Backend (patet-api)")" || return 1
+      rel_f="$(choose_release_interactive "$WEB_ROOT" "Frontend (patet-website)")" || return 1
+      mark_stable "$API_ROOT" "Backend (patet-api)" "$rel_b"
+      mark_stable "$WEB_ROOT" "Frontend (patet-website)" "$rel_f"
+      ;;
+  esac
+  echo
+  echo "Done."
+}
+
+interactive_rollback_flow() {
+  local scope
+  local rel_b rel_f
+  scope="$(choose_scope_interactive)" || return 1
+  case "$scope" in
+    backend)
+      log "Rolling back backend"
+      rel_b="$(choose_release_interactive "$API_ROOT" "Backend (patet-api)")" || return 1
+      rollback_one "$API_ROOT" "Backend (patet-api)" "patet-api" "restart" "$rel_b"
+      verify_backend
+      print_release_git_info "Backend (patet-api)" "$(readlink -f "$API_ROOT/current")"
+      ;;
+    frontend)
+      log "Rolling back frontend"
+      rel_f="$(choose_release_interactive "$WEB_ROOT" "Frontend (patet-website)")" || return 1
+      rollback_one "$WEB_ROOT" "Frontend (patet-website)" "patet-website" "reload" "$rel_f"
+      verify_frontend
+      print_release_git_info "Frontend (patet-website)" "$(readlink -f "$WEB_ROOT/current")"
+      ;;
+    both)
+      log "Rolling back backend"
+      rel_b="$(choose_release_interactive "$API_ROOT" "Backend (patet-api)")" || return 1
+      rollback_one "$API_ROOT" "Backend (patet-api)" "patet-api" "restart" "$rel_b"
+      verify_backend
+      print_release_git_info "Backend (patet-api)" "$(readlink -f "$API_ROOT/current")"
+
+      log "Rolling back frontend"
+      rel_f="$(choose_release_interactive "$WEB_ROOT" "Frontend (patet-website)")" || return 1
+      rollback_one "$WEB_ROOT" "Frontend (patet-website)" "patet-website" "reload" "$rel_f"
+      verify_frontend
+      print_release_git_info "Frontend (patet-website)" "$(readlink -f "$WEB_ROOT/current")"
+      ;;
+  esac
+  echo
+  echo "Rollback completed."
+}
+
+rollback_interactive_main() {
+  local top=""
+  echo "Patet rollback — choose an action:" >&2
+  echo "  [1] List releases (disk layout + current/stable flags + running release details)" >&2
+  echo "  [2] Set stable marker" >&2
+  echo "  [3] Rollback (switch current + PM2)" >&2
+  echo >&2
+  while true; do
+    read -r -p "Enter choice (1-3): " top
+    top="${top//[$'\r\n']}"
+    case "$top" in
+      1)
+        interactive_list_flow
+        return $?
+        ;;
+      2)
+        interactive_stable_flow
+        return $?
+        ;;
+      3)
+        interactive_rollback_flow
+        return $?
+        ;;
+      *)
+        echo "Invalid choice. Enter 1, 2, or 3." >&2
+        ;;
+    esac
+  done
+}
+
+if [[ -z "$ACTION" ]]; then
+  if [[ -t 0 && -t 1 ]]; then
+    rollback_interactive_main
+    exit $?
+  fi
+  rollback_usage
+  exit 1
+fi
+
 case "$ACTION" in
   backend)
     log "Rolling back backend"
@@ -326,6 +502,4 @@ esac
 
 echo
 echo "Rollback completed."
-
-
 
