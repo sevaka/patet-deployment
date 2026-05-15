@@ -50,6 +50,6 @@ Routine deploys: `./deploy.sh frontend`.
 
 ## Related scripts
 
-- `deploy.sh` — clone/build releases, symlink `current`, PM2 reload/start (backend reload; frontend `startOrReload`)
+- `deploy.sh` — clone/build releases, symlink `current`, PM2 reload/start (backend reload; frontend `startOrReload`). Optional **`--with-migrate`** (or `PATET_WITH_BACKEND_MIGRATE=1`) on backend deploy: after a successful `yarn build`, run `yarn migration:run` on `current`, then `pm2 reload` (default deploy does not run migrations).
 - `rollback.sh` — point `current` at a release, PM2 reload/start. On a TTY, run `./rollback.sh` with **no arguments** for an interactive menu (list releases with current/stable flags, set stable marker, or rollback) using numbered choices only; `backend|frontend|all|stable|status` with explicit arguments still work for automation.
-- `migrate_backend.sh` — run TypeORM migrations from `current`
+- `migrate_backend.sh` — run TypeORM migrations from `current` (standalone; also used by deploy when `--with-migrate` is set)
