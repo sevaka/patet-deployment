@@ -343,3 +343,58 @@ cleanup_releases_keep_distinct_successful_sha() {
     rm -rf "$dir"
   done
 }
+
+# PM2 cluster instances in ecosystem.config.js (patet-api and patet-website).
+PATET_PM2_CLUSTER_INSTANCES="${PATET_PM2_CLUSTER_INSTANCES:-2}"
+
+# Set by prepare_pm2_for_build; restore_pm2_cluster_sizes runs on EXIT from deploy_*.
+_PATET_PM2_SCALED_DOWN_FOR_BUILD=false
+
+_pm2_app_exists() {
+  local name="$1"
+  pm2 describe "$name" >/dev/null 2>&1
+}
+
+_pm2_scale_app_instances() {
+  local name="$1"
+  local instances="$2"
+  if ! _pm2_app_exists "$name"; then
+    return 0
+  fi
+  echo "[deploy] pm2 scale $name -> $instances instance(s)"
+  pm2 scale "$name" "$instances" --update-env
+}
+
+# Scale patet-api and patet-website to 1 worker each before yarn build (frees RAM on small VPS).
+# Disable: PATET_BUILD_SCALE_PM2_DOWN=0
+prepare_pm2_for_build() {
+  local flag="${PATET_BUILD_SCALE_PM2_DOWN:-1}"
+  if [[ "$flag" == "0" || "$flag" == "false" ]]; then
+    return 0
+  fi
+  if ! command -v pm2 >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! _pm2_app_exists patet-api && ! _pm2_app_exists patet-website; then
+    return 0
+  fi
+  echo
+  echo "==== PM2: scale to 1 instance (API + website) for build ===="
+  _pm2_scale_app_instances patet-api 1
+  _pm2_scale_app_instances patet-website 1
+  _PATET_PM2_SCALED_DOWN_FOR_BUILD=true
+}
+
+restore_pm2_cluster_sizes() {
+  if [[ "$_PATET_PM2_SCALED_DOWN_FOR_BUILD" != "true" ]]; then
+    return 0
+  fi
+  if ! command -v pm2 >/dev/null 2>&1; then
+    return 0
+  fi
+  echo
+  echo "==== PM2: restore cluster size (${PATET_PM2_CLUSTER_INSTANCES} instances) ===="
+  _pm2_scale_app_instances patet-api "$PATET_PM2_CLUSTER_INSTANCES"
+  _pm2_scale_app_instances patet-website "$PATET_PM2_CLUSTER_INSTANCES"
+  _PATET_PM2_SCALED_DOWN_FOR_BUILD=false
+}

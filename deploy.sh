@@ -5,9 +5,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=deploy-common.sh
 source "$SCRIPT_DIR/deploy-common.sh"
 
-ACTION="${1:-}"
-STATUS_SCOPE="${2:-all}"
-
 API_ROOT="/var/www/patet-api"
 WEB_ROOT="/var/www/patet-website"
 
@@ -40,18 +37,43 @@ FRONTEND_SHARED_FILES=(
 deploy_usage() {
   echo "Patet production deploy (clone/build, swap current, PM2, health check)."
   echo
-  echo "Usage: $0 {backend|frontend|all|status} [scope_for_status]"
-  echo "  Deploy: $0 backend|frontend|all"
+  echo "Usage: $0 {backend|frontend|all|status} [scope_for_status] [options]"
+  echo "  Deploy: $0 backend|frontend|all [--with-migrate]"
   echo "  Status: $0 status [backend|frontend|all]  — git SHA, commit date, deploy meta for live release"
   echo
   echo "Options:"
-  echo "  -h, --help    Show this help and exit"
+  echo "  --with-migrate   After a successful backend build, run migrations on current, then pm2 reload"
+  echo "                   (backend / all only). Default: migrations are not run by deploy."
+  echo "  -h, --help       Show this help and exit"
+  echo
+  echo "Environment:"
+  echo "  PATET_WITH_BACKEND_MIGRATE=1|true   Same as --with-migrate (for backend deploy)"
+  echo "  PATET_BUILD_SCALE_PM2_DOWN=0        Skip scaling patet-api/patet-website to 1 instance during yarn build"
 }
 
-if [[ "$ACTION" == "-h" || "$ACTION" == "--help" ]]; then
-  deploy_usage
-  exit 0
+WITH_BACKEND_MIGRATE=false
+POSITIONAL=()
+for arg in "$@"; do
+  case "$arg" in
+    --with-migrate)
+      WITH_BACKEND_MIGRATE=true
+      ;;
+    -h|--help)
+      deploy_usage
+      exit 0
+      ;;
+    *)
+      POSITIONAL+=("$arg")
+      ;;
+  esac
+done
+
+if [[ "${PATET_WITH_BACKEND_MIGRATE:-}" == "1" || "${PATET_WITH_BACKEND_MIGRATE:-}" == "true" ]]; then
+  WITH_BACKEND_MIGRATE=true
 fi
+
+ACTION="${POSITIONAL[0]:-}"
+STATUS_SCOPE="${POSITIONAL[1]:-all}"
 
 if [[ -z "$ACTION" ]]; then
   deploy_usage
@@ -105,6 +127,17 @@ verify_backend() {
   exit 1
 }
 
+run_backend_migrations() {
+  log "Running backend migrations"
+  if [ ! -L "$API_ROOT/current" ]; then
+    echo "Backend current symlink does not exist."
+    exit 1
+  fi
+  cd "$API_ROOT/current"
+  yarn migration:run
+  echo "Backend migrations completed."
+}
+
 verify_frontend() {
   log "Verifying frontend"
   echo "Manual check (same as this script): curl -fsS \"$FRONTEND_HEALTH_URL\""
@@ -134,6 +167,9 @@ deploy_backend() {
   capture_release_git_info _old_backend_info "Backend (patet-api)" "$_old_backend_dir"
 
   log "Deploying backend release $release"
+  prepare_pm2_for_build
+  trap restore_pm2_cluster_sizes EXIT
+
   git clone --branch "$API_BRANCH" --single-branch "$API_REPO" "$release_dir"
 
   if [ ! -f "$API_ROOT/shared/.env" ]; then
@@ -145,10 +181,23 @@ deploy_backend() {
 
   cd "$release_dir"
   yarn install
-  yarn build
+
+  local build_rc=0
+  yarn build || build_rc=$?
+  if [[ "${build_rc:-0}" -ne 0 ]]; then
+    echo "ERROR: backend yarn build exited with code ${build_rc}. Skipping migrate and PM2 reload."
+    exit 1
+  fi
+
+  restore_pm2_cluster_sizes
+  trap - EXIT
 
   ln -sfn "$release_dir" "$API_ROOT/current"
   echo "Backend current -> $(readlink -f "$API_ROOT/current")"
+
+  if [[ "$WITH_BACKEND_MIGRATE" == "true" ]]; then
+    run_backend_migrations
+  fi
 
   if pm2 describe patet-api > /dev/null 2>&1; then
     pm2 reload "$PM2_ECOSYSTEM" --only patet-api --update-env
@@ -201,6 +250,9 @@ deploy_frontend() {
   capture_release_git_info _old_frontend_info "Frontend (patet-website)" "$_old_frontend_dir"
 
   log "Deploying frontend release $release"
+  prepare_pm2_for_build
+  trap restore_pm2_cluster_sizes EXIT
+
   git clone --branch "$WEB_BRANCH" --single-branch "$WEB_REPO" "$release_dir"
 
   if [ ! -f "$WEB_ROOT/shared/.env" ]; then
@@ -232,6 +284,9 @@ deploy_frontend() {
     echo "ERROR: yarn build exited with code ${build_rc}. Fix compile/type errors above."
     exit 1
   fi
+
+  restore_pm2_cluster_sizes
+  trap - EXIT
 
   if [[ ! -f "$release_dir/.next/BUILD_ID" ]]; then
     echo "ERROR: next build did not produce a production output (missing $release_dir/.next/BUILD_ID)."
