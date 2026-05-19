@@ -359,26 +359,25 @@ _pm2_scale_app_instances() {
   local name="$1"
   local instances="$2"
   if ! _pm2_app_exists "$name"; then
+    echo "[deploy] pm2 scale $name -> $instances skipped (app not in PM2)"
     return 0
   fi
   echo "[deploy] pm2 scale $name -> $instances instance(s)"
-  pm2 scale "$name" "$instances" --update-env || {
-    echo "[deploy] pm2 scale skipped for $name (unchanged or PM2: Nothing to do)"
+  # Never fail deploy: PM2 may print "Nothing to do" if already at that instance count.
+  pm2 scale "$name" "$instances" --update-env 2>&1 || {
+    echo "[deploy] pm2 scale note for $name: continuing deploy (unchanged or PM2 error ignored)"
     return 0
   }
 }
 
-# Opt-in: scale patet-api and patet-website to 1 worker each before yarn build (frees RAM on small VPS).
-# Enable: PATET_BUILD_SCALE_PM2_DOWN=1 in deploy.sh
+# Scale patet-api and patet-website to 1 worker each before yarn build; restore after (or on EXIT).
+# Disable: PATET_BUILD_SCALE_PM2_DOWN=0
 prepare_pm2_for_build() {
-  local flag="${PATET_BUILD_SCALE_PM2_DOWN:-0}"
+  local flag="${PATET_BUILD_SCALE_PM2_DOWN:-1}"
   if [[ "$flag" == "0" || "$flag" == "false" ]]; then
     return 0
   fi
   if ! command -v pm2 >/dev/null 2>&1; then
-    return 0
-  fi
-  if ! _pm2_app_exists patet-api && ! _pm2_app_exists patet-website; then
     return 0
   fi
   echo
