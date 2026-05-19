@@ -1,6 +1,7 @@
 # Local / accidental secrets (scripts use server-side shared/.env only)
 .env
 .env.*
+deploy.local.env
 *.pem
 *.key
 

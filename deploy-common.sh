@@ -1,5 +1,296 @@
 #!/usr/bin/env bash
-# Shared helpers for deploy.sh and rollback.sh (source this file; do not execute directly).
+# Shared helpers for deploy.sh, finalize-release.sh, and rollback.sh (source this file; do not execute directly).
+
+_DEPLOY_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=deploy-config.sh
+source "$_DEPLOY_COMMON_DIR/deploy-config.sh"
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || { echo "Missing command: $1"; exit 1; }
+}
+
+patet_log() {
+  echo
+  echo "==== $* ===="
+}
+
+patet_timestamp() {
+  TZ=Asia/Yerevan date +"%Y-%m-%d_%H%M%S"
+}
+
+symlink_shared_files() {
+  local shared_dir="$1"
+  local release_dir="$2"
+  shift 2
+  local files=("$@")
+  local f
+
+  for f in "${files[@]}"; do
+    if [[ ! -e "$shared_dir/$f" ]]; then
+      echo "Missing shared file: $shared_dir/$f"
+      exit 1
+    fi
+    ln -sfn "$shared_dir/$f" "$release_dir/$f"
+  done
+}
+
+remove_non_yarn_lockfiles() {
+  local release_dir="$1"
+  local lockfile
+
+  for lockfile in "package-lock.json" "npm-shrinkwrap.json"; do
+    if [[ -f "$release_dir/$lockfile" ]]; then
+      echo "Removing $lockfile from release (Yarn-only installs)"
+      rm -f "$release_dir/$lockfile"
+    fi
+  done
+}
+
+# patet_read_commit_sha_for_release <release_dir>
+# Uses .patet-upload-sha (Windows artifact deploy) or git HEAD.
+patet_read_commit_sha_for_release() {
+  local release_dir="$1"
+  local val sha
+
+  if [[ -f "$release_dir/.patet-upload-sha" ]]; then
+    IFS= read -r val <"$release_dir/.patet-upload-sha" || true
+    val="${val//$'\r'/}"
+    val="${val//[[:space:]]/}"
+    if [[ "$val" =~ ^[a-f0-9]{7,40}$ ]]; then
+      echo "$val"
+      return 0
+    fi
+  fi
+
+  if [[ -d "$release_dir/.git" ]] && sha="$(git -C "$release_dir" rev-parse HEAD 2>/dev/null)"; then
+    echo "$sha"
+    return 0
+  fi
+
+  return 1
+}
+
+verify_backend_health() {
+  patet_log "Verifying backend (will retry while HTTP is 000 or empty — app still starting)"
+  local attempt=1
+  local code=""
+
+  while [[ "$attempt" -le "$BACKEND_VERIFY_MAX_ATTEMPTS" ]]; do
+    code="$(
+      curl -sS -o /dev/null -w "%{http_code}" \
+        --connect-timeout 3 --max-time 10 \
+        "$BACKEND_HEALTH_URL" 2>/dev/null || true
+    )"
+    if [[ "$code" == "200" || "$code" == "401" ]]; then
+      echo "Backend looks up (HTTP $code from /api/v1/auth/me) after attempt $attempt/$BACKEND_VERIFY_MAX_ATTEMPTS"
+      return 0
+    fi
+    echo "  ... not ready (HTTP ${code:-000}), attempt $attempt/$BACKEND_VERIFY_MAX_ATTEMPTS — sleeping ${BACKEND_VERIFY_SLEEP_SECS}s"
+    sleep "$BACKEND_VERIFY_SLEEP_SECS"
+    attempt=$((attempt + 1))
+  done
+  echo "Backend verification failed after $BACKEND_VERIFY_MAX_ATTEMPTS attempts. Last HTTP code: ${code:-000}"
+  exit 1
+}
+
+verify_frontend_health() {
+  patet_log "Verifying frontend"
+  echo "Manual check (same as this script): curl -fsS \"$FRONTEND_HEALTH_URL\""
+  if ! curl -fsS "$FRONTEND_HEALTH_URL" >/dev/null; then
+    echo "Frontend verification failed."
+    echo "Retry manually: curl -fsS \"$FRONTEND_HEALTH_URL\""
+    echo "With response headers: curl -fsSI \"$FRONTEND_HEALTH_URL\""
+    exit 1
+  fi
+  echo "Frontend looks up."
+}
+
+run_backend_migrations() {
+  patet_log "Running backend migrations"
+  if [[ ! -L "$API_ROOT/current" ]]; then
+    echo "Backend current symlink does not exist."
+    exit 1
+  fi
+  cd "$API_ROOT/current"
+  yarn migration:run
+  echo "Backend migrations completed."
+}
+
+assert_backend_build_artifacts() {
+  local release_dir="$1"
+  if [[ ! -f "$release_dir/dist/src/main.js" ]]; then
+    echo "ERROR: missing backend build artifact: $release_dir/dist/src/main.js"
+    echo "Build on Windows (yarn build) or run deploy.sh backend to build on the server."
+    exit 1
+  fi
+}
+
+assert_frontend_build_artifacts() {
+  local release_dir="$1"
+  if [[ ! -f "$release_dir/.next/BUILD_ID" ]]; then
+    echo "ERROR: next build did not produce a production output (missing $release_dir/.next/BUILD_ID)."
+    echo "Typical causes: incomplete Windows upload, Linux OOM (check dmesg), disk full, or Node killed before finalize."
+    echo "Disk space:" && df -h "$release_dir" || true
+    echo "Memory:" && free -h 2>/dev/null || true
+    echo "Next.js version from package.json:"
+    node -p "require('./package.json').dependencies.next" 2>/dev/null || echo "  (could not read)"
+    echo "Listing .next if present:"
+    ls -la "$release_dir/.next" 2>/dev/null || echo "  (no .next directory)"
+    echo "BUILD_ID search:"
+    find "$release_dir/.next" -name BUILD_ID -print 2>/dev/null || true
+    exit 1
+  fi
+}
+
+ensure_backend_shared_env() {
+  if [[ ! -f "$API_ROOT/shared/.env" ]]; then
+    echo "Missing backend shared env: $API_ROOT/shared/.env"
+    exit 1
+  fi
+}
+
+ensure_frontend_shared_env() {
+  if [[ ! -f "$WEB_ROOT/shared/.env" ]]; then
+    echo "Missing frontend shared env: $WEB_ROOT/shared/.env"
+    exit 1
+  fi
+}
+
+yarn_install_backend_release() {
+  local release_dir="$1"
+  cd "$release_dir"
+  export BUILD_MEM_MAX="${BUILD_MEM_MAX:-2G}"
+  export BUILD_CPU_MAX_PERCENT="${BUILD_CPU_MAX_PERCENT:-40}"
+  yarn install
+}
+
+yarn_install_frontend_release() {
+  local release_dir="$1"
+  cd "$release_dir"
+  remove_non_yarn_lockfiles "$release_dir"
+  export NODE_ENV=production
+  export BUILD_MEM_MAX="${BUILD_MEM_MAX:-2G}"
+  export BUILD_CPU_MAX_PERCENT="${BUILD_CPU_MAX_PERCENT:-40}"
+  yarn install --non-interactive
+}
+
+reload_backend_pm2() {
+  if pm2 describe patet-api >/dev/null 2>&1; then
+    pm2 reload "$PM2_ECOSYSTEM" --only patet-api --update-env
+  else
+    pm2 start "$PM2_ECOSYSTEM" --only patet-api --update-env
+  fi
+}
+
+reload_frontend_pm2() {
+  if pm2 describe patet-website >/dev/null 2>&1; then
+    pm2 startOrReload "$PM2_ECOSYSTEM" --only patet-website --update-env
+  else
+    pm2 start "$PM2_ECOSYSTEM" --only patet-website --update-env
+  fi
+}
+
+# patet_activate_backend_release <release_dir> <with_migrate:true|false>
+patet_activate_backend_release() {
+  local release_dir="$1"
+  local with_migrate="${2:-false}"
+
+  assert_backend_build_artifacts "$release_dir"
+
+  ln -sfn "$release_dir" "$API_ROOT/current"
+  echo "Backend current -> $(readlink -f "$API_ROOT/current")"
+
+  if [[ "$with_migrate" == "true" ]]; then
+    run_backend_migrations
+  fi
+
+  reload_backend_pm2
+  verify_backend_health
+  write_patet_release_meta "$release_dir" backend
+  cleanup_releases_keep_distinct_successful_sha "$API_ROOT" "$KEEP_DISTINCT_SUCCESSFUL_SHAS" backend
+}
+
+# patet_activate_frontend_release <release_dir>
+patet_activate_frontend_release() {
+  local release_dir="$1"
+
+  assert_frontend_build_artifacts "$release_dir"
+
+  ln -sfn "$release_dir" "$WEB_ROOT/current"
+  echo "Frontend current -> $(readlink -f "$WEB_ROOT/current")"
+
+  reload_frontend_pm2
+  verify_frontend_health
+  write_patet_release_meta "$release_dir" frontend
+  cleanup_releases_keep_distinct_successful_sha "$WEB_ROOT" "$KEEP_DISTINCT_SUCCESSFUL_SHAS" frontend
+}
+
+# patet_finalize_uploaded_backend <release_name> <with_migrate:true|false>
+patet_finalize_uploaded_backend() {
+  local release_name="$1"
+  local with_migrate="${2:-true}"
+  local release_dir="$API_ROOT/releases/$release_name"
+  local _old_backend_info _old_backend_dir
+
+  require_cmd yarn
+  require_cmd pm2
+  require_cmd curl
+
+  if [[ ! -d "$release_dir" ]]; then
+    echo "Backend release directory does not exist: $release_dir"
+    exit 1
+  fi
+
+  _old_backend_dir="$(readlink -f "$API_ROOT/current" 2>/dev/null || true)"
+  capture_release_git_info _old_backend_info "Backend (patet-api)" "$_old_backend_dir"
+
+  patet_log "Finalizing uploaded backend release $release_name"
+  ensure_backend_shared_env
+  symlink_shared_files "$API_ROOT/shared" "$release_dir" "${BACKEND_SHARED_FILES[@]}"
+  yarn_install_backend_release "$release_dir"
+  patet_activate_backend_release "$release_dir" "$with_migrate"
+
+  echo "Backend finalize complete: $release_dir"
+  echo
+  echo "==== Changed from: Backend (patet-api) release ===="
+  echo "$_old_backend_info" | grep -v '^====' || true
+  echo
+  echo "==== New Running: Backend (patet-api) release ===="
+  _build_release_git_info_lines "Backend (patet-api)" "$(readlink -f "$API_ROOT/current")"
+}
+
+# patet_finalize_uploaded_frontend <release_name>
+patet_finalize_uploaded_frontend() {
+  local release_name="$1"
+  local release_dir="$WEB_ROOT/releases/$release_name"
+  local _old_frontend_info _old_frontend_dir
+
+  require_cmd yarn
+  require_cmd pm2
+  require_cmd curl
+
+  if [[ ! -d "$release_dir" ]]; then
+    echo "Frontend release directory does not exist: $release_dir"
+    exit 1
+  fi
+
+  _old_frontend_dir="$(readlink -f "$WEB_ROOT/current" 2>/dev/null || true)"
+  capture_release_git_info _old_frontend_info "Frontend (patet-website)" "$_old_frontend_dir"
+
+  patet_log "Finalizing uploaded frontend release $release_name"
+  ensure_frontend_shared_env
+  symlink_shared_files "$WEB_ROOT/shared" "$release_dir" "${FRONTEND_SHARED_FILES[@]}"
+  yarn_install_frontend_release "$release_dir"
+  patet_activate_frontend_release "$release_dir"
+
+  echo "Frontend finalize complete: $release_dir"
+  echo
+  echo "==== Changed from: Frontend (patet-website) release ===="
+  echo "$_old_frontend_info" | grep -v '^====' || true
+  echo
+  echo "==== New Running: Frontend (patet-website) release ===="
+  _build_release_git_info_lines "Frontend (patet-website)" "$(readlink -f "$WEB_ROOT/current")"
+}
 
 # _build_release_git_info_lines <label> <repo_dir>
 # Echoes the release info lines (no surrounding separators) to stdout.
@@ -188,8 +479,8 @@ write_patet_release_meta() {
   fi
 
   local sha recorded
-  if ! sha="$(git -C "$release_dir" rev-parse HEAD 2>/dev/null)"; then
-    echo "write_patet_release_meta: git rev-parse failed in $release_dir" >&2
+  if ! sha="$(patet_read_commit_sha_for_release "$release_dir")"; then
+    echo "write_patet_release_meta: no commit SHA in $release_dir (.patet-upload-sha or .git required)" >&2
     return 1
   fi
 
@@ -241,7 +532,7 @@ release_read_commit_sha() {
     fi
   fi
 
-  if [[ -d "$release_dir/.git" ]] && sha="$(git -C "$release_dir" rev-parse HEAD 2>/dev/null)"; then
+  if sha="$(patet_read_commit_sha_for_release "$release_dir" 2>/dev/null)"; then
     echo "$sha"
     return 0
   fi

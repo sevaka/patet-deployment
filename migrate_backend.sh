@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-API_ROOT="/var/www/patet-api"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=deploy-common.sh
+source "$SCRIPT_DIR/deploy-common.sh"
 
 if [ ! -L "$API_ROOT/current" ]; then
   echo "Backend current symlink does not exist."
