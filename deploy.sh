@@ -171,6 +171,8 @@ deploy_backend() {
   log "Deploying backend release $release"
   prepare_pm2_for_build
   trap restore_pm2_cluster_sizes EXIT
+  prepare_pm2_for_build
+  trap restore_pm2_cluster_sizes EXIT
 
   git clone --branch "$API_BRANCH" --single-branch "$API_REPO" "$release_dir"
 
@@ -193,6 +195,8 @@ deploy_backend() {
     exit 1
   fi
 
+  restore_pm2_cluster_sizes
+  trap - EXIT
   restore_pm2_cluster_sizes
   trap - EXIT
 
@@ -256,6 +260,8 @@ deploy_frontend() {
   log "Deploying frontend release $release"
   prepare_pm2_for_build
   trap restore_pm2_cluster_sizes EXIT
+  prepare_pm2_for_build
+  trap restore_pm2_cluster_sizes EXIT
 
   git clone --branch "$WEB_BRANCH" --single-branch "$WEB_REPO" "$release_dir"
 
@@ -291,6 +297,8 @@ deploy_frontend() {
     exit 1
   fi
 
+  restore_pm2_cluster_sizes
+  trap - EXIT
   restore_pm2_cluster_sizes
   trap - EXIT
 
