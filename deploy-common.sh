@@ -362,13 +362,16 @@ _pm2_scale_app_instances() {
     return 0
   fi
   echo "[deploy] pm2 scale $name -> $instances instance(s)"
-  pm2 scale "$name" "$instances" --update-env
+  pm2 scale "$name" "$instances" --update-env || {
+    echo "[deploy] pm2 scale skipped for $name (unchanged or PM2: Nothing to do)"
+    return 0
+  }
 }
 
-# Scale patet-api and patet-website to 1 worker each before yarn build (frees RAM on small VPS).
-# Disable: PATET_BUILD_SCALE_PM2_DOWN=0
+# Opt-in: scale patet-api and patet-website to 1 worker each before yarn build (frees RAM on small VPS).
+# Enable: PATET_BUILD_SCALE_PM2_DOWN=1 in deploy.sh
 prepare_pm2_for_build() {
-  local flag="${PATET_BUILD_SCALE_PM2_DOWN:-1}"
+  local flag="${PATET_BUILD_SCALE_PM2_DOWN:-0}"
   if [[ "$flag" == "0" || "$flag" == "false" ]]; then
     return 0
   fi

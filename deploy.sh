@@ -48,7 +48,8 @@ deploy_usage() {
   echo
   echo "Environment:"
   echo "  PATET_WITH_BACKEND_MIGRATE=1|true   Same as --with-migrate (for backend deploy)"
-  echo "  PATET_BUILD_SCALE_PM2_DOWN=0        Skip scaling patet-api/patet-website to 1 instance during yarn build"
+  echo "  PATET_BUILD_SCALE_PM2_DOWN=1        Opt-in: scale patet-api/patet-website to 1 instance during yarn build (default: off)"
+  echo "  BUILD_MEM_MAX=1536M                 Example: raise frontend/backend build RAM cap (default in repo: 1G)"
 }
 
 WITH_BACKEND_MIGRATE=false
@@ -167,8 +168,10 @@ deploy_backend() {
   capture_release_git_info _old_backend_info "Backend (patet-api)" "$_old_backend_dir"
 
   log "Deploying backend release $release"
-  prepare_pm2_for_build
-  trap restore_pm2_cluster_sizes EXIT
+  if [[ "${PATET_BUILD_SCALE_PM2_DOWN:-}" == "1" || "${PATET_BUILD_SCALE_PM2_DOWN:-}" == "true" ]]; then
+    prepare_pm2_for_build
+    trap restore_pm2_cluster_sizes EXIT
+  fi
 
   git clone --branch "$API_BRANCH" --single-branch "$API_REPO" "$release_dir"
 
@@ -189,8 +192,10 @@ deploy_backend() {
     exit 1
   fi
 
-  restore_pm2_cluster_sizes
-  trap - EXIT
+  if [[ "${PATET_BUILD_SCALE_PM2_DOWN:-}" == "1" || "${PATET_BUILD_SCALE_PM2_DOWN:-}" == "true" ]]; then
+    restore_pm2_cluster_sizes
+    trap - EXIT
+  fi
 
   ln -sfn "$release_dir" "$API_ROOT/current"
   echo "Backend current -> $(readlink -f "$API_ROOT/current")"
@@ -250,8 +255,10 @@ deploy_frontend() {
   capture_release_git_info _old_frontend_info "Frontend (patet-website)" "$_old_frontend_dir"
 
   log "Deploying frontend release $release"
-  prepare_pm2_for_build
-  trap restore_pm2_cluster_sizes EXIT
+  if [[ "${PATET_BUILD_SCALE_PM2_DOWN:-}" == "1" || "${PATET_BUILD_SCALE_PM2_DOWN:-}" == "true" ]]; then
+    prepare_pm2_for_build
+    trap restore_pm2_cluster_sizes EXIT
+  fi
 
   git clone --branch "$WEB_BRANCH" --single-branch "$WEB_REPO" "$release_dir"
 
@@ -269,6 +276,7 @@ deploy_frontend() {
   rm -rf "$release_dir/.next"
 
   export NODE_ENV=production
+  export BUILD_MEM_MAX="${BUILD_MEM_MAX:-1536M}"
   # On low-memory VPS builds can be SIGKILL'd mid-write; increase heap, e.g.:
   #   export NEXT_BUILD_NODE_OPTIONS="--max-old-space-size=4096"
   if [[ -n "${NEXT_BUILD_NODE_OPTIONS:-}" ]]; then
@@ -285,8 +293,10 @@ deploy_frontend() {
     exit 1
   fi
 
-  restore_pm2_cluster_sizes
-  trap - EXIT
+  if [[ "${PATET_BUILD_SCALE_PM2_DOWN:-}" == "1" || "${PATET_BUILD_SCALE_PM2_DOWN:-}" == "true" ]]; then
+    restore_pm2_cluster_sizes
+    trap - EXIT
+  fi
 
   if [[ ! -f "$release_dir/.next/BUILD_ID" ]]; then
     echo "ERROR: next build did not produce a production output (missing $release_dir/.next/BUILD_ID)."

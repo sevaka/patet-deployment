@@ -48,11 +48,19 @@ Use if you need to re-register `patet-website` from this ecosystem file (e.g. fr
 
 Routine deploys: `./deploy.sh frontend`.
 
-## Build-time PM2 scale-down (low-memory VPS)
+## Build-time PM2 scale-down (optional, off by default)
 
-Before **`yarn build`** (backend or frontend), `deploy.sh` scales **`patet-api`** and **`patet-website`** from **2 → 1** cluster worker each (when those apps are already registered in PM2). That frees roughly one API + one Next worker worth of RAM during compile. After a successful build, cluster size is restored to **2** before `pm2 reload` / `startOrReload` (which also match `instances: 2` in `ecosystem.config.js`). On build failure, the same restore runs via an `EXIT` trap.
+By default, deploy **does not** change PM2 instance counts during build. `pm2 reload` / `startOrReload` at the end still runs **2** workers per `ecosystem.config.js`.
 
-Disable: `PATET_BUILD_SCALE_PM2_DOWN=0 ./deploy.sh frontend`
+To free RAM on a small VPS, opt in:
+
+`PATET_BUILD_SCALE_PM2_DOWN=1 ./deploy.sh frontend`
+
+That scales **`patet-api`** and **`patet-website`** to **1** instance before `yarn build`, then back to **2** after build (or on failure via `EXIT` trap). If PM2 prints `Nothing to do`, the deploy continues (already at that instance count).
+
+## Frontend build memory cap
+
+`deploy.sh frontend` sets **`BUILD_MEM_MAX=1536M`** unless you override it. Override: `BUILD_MEM_MAX=1G ./deploy.sh frontend`
 
 ## Related scripts
 
