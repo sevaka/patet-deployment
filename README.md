@@ -48,15 +48,13 @@ Use if you need to re-register `patet-website` from this ecosystem file (e.g. fr
 
 Routine deploys: `./deploy.sh frontend`.
 
-## Build-time PM2 scale-down (optional, off by default)
+## Build-time PM2 scale-down / scale-up (default on)
 
-By default, deploy **does not** change PM2 instance counts during build. `pm2 reload` / `startOrReload` at the end still runs **2** workers per `ecosystem.config.js`.
+Before **`yarn build`**, deploy scales **`patet-api`** and **`patet-website`** to **1** instance each (when registered in PM2). After build (or on failure via `EXIT` trap), it scales back to **2** each. If PM2 errors (e.g. `Nothing to do`), deploy **continues anyway**.
 
-To free RAM on a small VPS, opt in:
+Disable: `PATET_BUILD_SCALE_PM2_DOWN=0 ./deploy.sh frontend`
 
-`PATET_BUILD_SCALE_PM2_DOWN=1 ./deploy.sh frontend`
-
-That scales **`patet-api`** and **`patet-website`** to **1** instance before `yarn build`, then back to **2** after build (or on failure via `EXIT` trap). If PM2 prints `Nothing to do`, the deploy continues (already at that instance count).
+`pm2 reload` / `startOrReload` at the end still applies the ecosystem config.
 
 ## Frontend build memory cap
 

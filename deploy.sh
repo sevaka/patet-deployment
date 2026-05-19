@@ -48,7 +48,7 @@ deploy_usage() {
   echo
   echo "Environment:"
   echo "  PATET_WITH_BACKEND_MIGRATE=1|true   Same as --with-migrate (for backend deploy)"
-  echo "  PATET_BUILD_SCALE_PM2_DOWN=1        Opt-in: scale patet-api/patet-website to 1 instance during yarn build (default: off)"
+  echo "  PATET_BUILD_SCALE_PM2_DOWN=0        Skip PM2 scale to 1 before build (default: scale down/up; errors ignored)"
   echo "  BUILD_MEM_MAX=1536M                 Example: raise frontend/backend build RAM cap (default in repo: 1G)"
 }
 
@@ -168,10 +168,8 @@ deploy_backend() {
   capture_release_git_info _old_backend_info "Backend (patet-api)" "$_old_backend_dir"
 
   log "Deploying backend release $release"
-  if [[ "${PATET_BUILD_SCALE_PM2_DOWN:-}" == "1" || "${PATET_BUILD_SCALE_PM2_DOWN:-}" == "true" ]]; then
-    prepare_pm2_for_build
-    trap restore_pm2_cluster_sizes EXIT
-  fi
+  prepare_pm2_for_build
+  trap restore_pm2_cluster_sizes EXIT
 
   git clone --branch "$API_BRANCH" --single-branch "$API_REPO" "$release_dir"
 
@@ -192,10 +190,8 @@ deploy_backend() {
     exit 1
   fi
 
-  if [[ "${PATET_BUILD_SCALE_PM2_DOWN:-}" == "1" || "${PATET_BUILD_SCALE_PM2_DOWN:-}" == "true" ]]; then
-    restore_pm2_cluster_sizes
-    trap - EXIT
-  fi
+  restore_pm2_cluster_sizes
+  trap - EXIT
 
   ln -sfn "$release_dir" "$API_ROOT/current"
   echo "Backend current -> $(readlink -f "$API_ROOT/current")"
@@ -255,10 +251,8 @@ deploy_frontend() {
   capture_release_git_info _old_frontend_info "Frontend (patet-website)" "$_old_frontend_dir"
 
   log "Deploying frontend release $release"
-  if [[ "${PATET_BUILD_SCALE_PM2_DOWN:-}" == "1" || "${PATET_BUILD_SCALE_PM2_DOWN:-}" == "true" ]]; then
-    prepare_pm2_for_build
-    trap restore_pm2_cluster_sizes EXIT
-  fi
+  prepare_pm2_for_build
+  trap restore_pm2_cluster_sizes EXIT
 
   git clone --branch "$WEB_BRANCH" --single-branch "$WEB_REPO" "$release_dir"
 
@@ -293,10 +287,8 @@ deploy_frontend() {
     exit 1
   fi
 
-  if [[ "${PATET_BUILD_SCALE_PM2_DOWN:-}" == "1" || "${PATET_BUILD_SCALE_PM2_DOWN:-}" == "true" ]]; then
-    restore_pm2_cluster_sizes
-    trap - EXIT
-  fi
+  restore_pm2_cluster_sizes
+  trap - EXIT
 
   if [[ ! -f "$release_dir/.next/BUILD_ID" ]]; then
     echo "ERROR: next build did not produce a production output (missing $release_dir/.next/BUILD_ID)."
