@@ -270,6 +270,7 @@ Copy from `deploy.local.env.example`:
 
 | Symptom | Likely cause | Fix |
 |---------|----------------|-----|
+| Stuck at **tar+scp** for a long time | Packing **`.next/cache`** (~800MB+) or locked **`.next/trace`** | Pull latest `deploy-from-windows.ps1` (excludes cache/trace); stop `next dev` before deploy; watch for `Archive ready: N MB` log line |
 | `rsync: not found` (WSL) | WSL without rsync | Ignore — script falls back to tar+scp; or install rsync in WSL |
 | `pipefail: invalid option name` | Shell scripts have Windows **CRLF** | On server: `sed -i 's/\r$//' /var/www/patet-deployment/*.sh`; re-run with `-SyncDeploymentScripts` |
 | `Missing command: yarn` over SSH | **nvm** not loaded in non-interactive shell | Pull latest `deploy-common.sh` (auto-loads nvm) or run finalize from a login shell |

@@ -130,6 +130,21 @@ function Invoke-YarnBuild {
                 $p = Join-Path $RepoPath $lock
                 if (Test-Path $p) { Remove-Item $p -Force }
             }
+            # .next/trace is often locked after `next dev` and breaks build + tar on Windows.
+            foreach ($stale in @('.next\trace', '.next\cache')) {
+                $p = Join-Path $RepoPath $stale
+                try {
+                    if (-not (Test-Path -LiteralPath $p -ErrorAction Stop)) { continue }
+                    Write-SubStep "Removing stale $stale before build..."
+                    Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction Stop
+                }
+                catch {
+                    throw @"
+Cannot access $stale (file may be locked by a running 'next dev' or Node process).
+Stop the dev server, delete .next\trace manually, then retry deploy.
+"@
+                }
+            }
         }
         yarn install
         if ($Kind -eq 'frontend') {
@@ -153,6 +168,26 @@ function Invoke-YarnBuild {
     finally {
         Pop-Location
     }
+}
+
+function Write-SubStep([string] $Message) {
+    Write-Host ("  [{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $Message)
+}
+
+# Shared upload excludes. .next/cache is dev-only (~hundreds of MB); .next/trace is often locked on Windows.
+function Get-PatetUploadExcludeNames {
+    return @(
+        'node_modules',
+        '.git',
+        '.next/cache',
+        '.next/trace',
+        '.env',
+        '.env.*',
+        'coverage',
+        '.cursor',
+        '.turbo',
+        '.vscode'
+    )
 }
 
 function Get-SshOptionArgs {
@@ -213,14 +248,12 @@ function Invoke-RsyncRelease {
         [string] $RemotePath,
         [string] $SshTarget
     )
-    $excludes = @(
-        '--exclude', 'node_modules/',
-        '--exclude', '.env',
-        '--exclude', '.env.*',
-        '--exclude', 'coverage/',
-        '--exclude', '.cursor/',
-        '--exclude', '*.log'
-    )
+    $excludes = @()
+    foreach ($name in Get-PatetUploadExcludeNames) {
+        $excludes += '--exclude', "$name/"
+        $excludes += '--exclude', $name
+    }
+    $excludes += '--exclude', '*.log'
     $mode = Get-RsyncMode
     if (-not $mode) {
         return $false
@@ -271,37 +304,45 @@ function Invoke-ScpTarRelease {
     Assert-Command scp
     Assert-Command ssh
 
-    $staging = Join-Path $env:TEMP ("patet-upload-" + [Guid]::NewGuid().ToString('N'))
-    $archive = "$staging.tgz"
-    New-Item -ItemType Directory -Path $staging -Force | Out-Null
+    $archive = Join-Path $env:TEMP ("patet-release-{0}.tgz" -f [Guid]::NewGuid().ToString('N'))
     try {
-        $tarArgs = @(
-            '-czf', $archive,
-            '--exclude=node_modules',
-            '--exclude=.env',
-            '--exclude=.env.*',
-            '--exclude=coverage',
-            '--exclude=.cursor',
-            '-C', $LocalPath,
-            '.'
-        )
-        & tar @tarArgs
-        if ($LASTEXITCODE -ne 0) { throw "tar create failed" }
+        $tarArgs = @('-czf', $archive)
+        foreach ($name in Get-PatetUploadExcludeNames) {
+            $tarArgs += "--exclude=$name"
+        }
+        $tarArgs += '-C', $LocalPath, '.'
+
+        Write-SubStep 'Creating compressed archive (excludes node_modules, .git, .next/cache, .next/trace)...'
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        & tar @tarArgs 2>&1 | ForEach-Object { Write-SubStep $_ }
+        if ($LASTEXITCODE -ne 0) {
+            throw "tar create failed (exit $LASTEXITCODE). Close apps locking .next (e.g. next dev) and retry."
+        }
+        $sizeMb = [math]::Round((Get-Item -LiteralPath $archive).Length / 1MB, 1)
+        Write-SubStep ("Archive ready: {0} MB in {1:mm\:ss}" -f $sizeMb, $sw.Elapsed)
 
         $sshOpts = Get-SshOptionArgs
         $remoteParent = ($RemotePath -replace '/[^/]+$','')
+        Write-SubStep 'Ensuring remote release directory exists...'
         & ssh @sshOpts $SshTarget "mkdir -p '$remoteParent' '$RemotePath'"
         if ($LASTEXITCODE -ne 0) { throw "ssh mkdir failed" }
 
+        Write-SubStep ("Uploading {0} MB to server (scp)..." -f $sizeMb)
+        $sw.Restart()
         & scp @sshOpts $archive "${SshTarget}:/tmp/patet-release.tgz"
         if ($LASTEXITCODE -ne 0) { throw "scp failed" }
+        Write-SubStep ("Upload finished in {0:mm\:ss}" -f $sw.Elapsed)
 
+        Write-SubStep 'Extracting on server...'
+        $sw.Restart()
         & ssh @sshOpts $SshTarget "rm -rf '$RemotePath' && mkdir -p '$RemotePath' && tar -xzf /tmp/patet-release.tgz -C '$RemotePath' && rm -f /tmp/patet-release.tgz"
         if ($LASTEXITCODE -ne 0) { throw "remote extract failed" }
+        Write-SubStep ("Extract finished in {0:mm\:ss}" -f $sw.Elapsed)
     }
     finally {
-        if (Test-Path $staging) { Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue }
-        if (Test-Path $archive) { Remove-Item $archive -Force -ErrorAction SilentlyContinue }
+        if (Test-Path -LiteralPath $archive) {
+            Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
