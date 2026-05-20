@@ -1,6 +1,304 @@
 # Patet production deployment scripts
 
-Scripts on the VPS under `/var/www/patet-deployment` (paths in `deploy.sh`).
+Scripts on the VPS live under `/var/www/patet-deployment` (paths in `deploy-config.sh`).
+
+## Quick reference: which deploy path?
+
+| Goal | Where | Command |
+|------|--------|---------|
+| Build on Windows, run on Ubuntu (recommended for heavy Next.js builds) | Windows PC | `.\deploy-from-windows.ps1 -Target all` |
+| Build and deploy entirely on the server | Ubuntu VPS | `./deploy.sh all --with-migrate` |
+| Backend only from Windows | Windows PC | `.\deploy-from-windows.ps1 -Target backend` |
+| Frontend only from Windows | Windows PC | `.\deploy-from-windows.ps1 -Target frontend` |
+| Check what is running | Ubuntu VPS | `./deploy.sh status all` |
+| Roll back | Ubuntu VPS | `./rollback.sh` (interactive) or `./rollback.sh backend <release_id>` |
+
+**Rule:** never upload `node_modules` from Windows. Native modules (e.g. bcrypt) must be installed on Linux via `yarn install` during finalize.
+
+---
+
+## One-time setup
+
+### A. Ubuntu server
+
+Run as a user with write access to `/var/www` (often `root`).
+
+| Step | Action |
+|------|--------|
+| 1 | Install **Node 20.12.2+** and **Yarn** (this VPS often uses **nvm** under `~/.nvm`). |
+| 2 | Install **PM2** globally (`pm2 -v` should work after loading nvm). |
+| 3 | Clone or copy this repo to `/var/www/patet-deployment`. |
+| 4 | Create release layout: `cd /var/www/patet-deployment && bash bootstrap_release_layout.sh` |
+| 5 | Place shared env files: `/var/www/patet-api/shared/.env` and `/var/www/patet-website/shared/.env` (and `ca-certificate.crt` for the API if used). |
+| 6 | Start PM2 apps once from the ecosystem file (see [PM2 cluster](#backend-pm2-cluster-mode-patet-api) below). |
+| 7 | `pm2 save` and enable PM2 on boot if not already (`pm2 startup`). |
+
+Verify on the server (interactive SSH, after nvm loads):
+
+```bash
+node -v    # expect v20.12.2 or newer
+yarn -v
+pm2 list
+curl -sS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:57303/api/v1/auth/me   # 200 or 401
+curl -fsS http://127.0.0.1:4993/ || echo "frontend not up yet"
+```
+
+### B. Windows PC
+
+| Step | Action |
+|------|--------|
+| 1 | Install **Node ≥ 20.12.2**, **Yarn**, **Git**. |
+| 2 | Use **OpenSSH** (`ssh`, `scp`) — built into Windows 10+. |
+| 3 | Clone repos next to each other, e.g. `Front_and_Back/patet-back-nestjs`, `patet-website`, `patet-deployment`. |
+| 4 | Copy `deploy.local.env.example` → `deploy.local.env` (gitignored). |
+| 5 | Set `PATET_SSH_HOST`, `PATET_SSH_USER`, and `PATET_SSH_EXTRA_ARGS` (see [SSH keys](#ssh-keys-windows--ubuntu)). |
+| 6 | Test SSH: `ssh -i C:\Users\YOU\.ssh\id_rsa USER@HOST "echo ok"` |
+
+### C. First Windows deploy (sync scripts to server)
+
+Server scripts must include `finalize-release.sh` and the current `deploy-common.sh` (nvm + CRLF fixes). Either:
+
+**Option 1 — from Windows:**
+
+```powershell
+cd c:\path\to\Front_and_Back\patet-deployment
+.\deploy-from-windows.ps1 -Target backend -SyncDeploymentScripts
+```
+
+**Option 2 — on the server:**
+
+```bash
+cd /var/www/patet-deployment && git pull
+sed -i 's/\r$//' *.sh && chmod +x finalize-release.sh deploy.sh rollback.sh
+```
+
+Then run a full deploy (backend, frontend, or both).
+
+---
+
+## Routine deploy from Windows
+
+Default flow: **local build → upload → finalize on Linux** (`yarn install`, symlink `.env`, migrations, PM2 reload).
+
+```powershell
+cd c:\path\to\Front_and_Back\patet-deployment
+.\deploy-from-windows.ps1 -Target all
+```
+
+| Flag | When to use |
+|------|----------------|
+| `-Target backend` / `frontend` / `all` | Ship one stack or both |
+| `-SkipBuild` | Artifacts already built locally |
+| `-SkipMigrate` | Backend finalize without `yarn migration:run` |
+| `-SkipUpload` | Build only; no upload or finalize |
+| `-ReleaseId 2026-05-20_120000` | Reuse or fix a specific release folder |
+| `-SyncDeploymentScripts` | Push updated `finalize-release.sh`, `deploy-common.sh`, etc. to the server |
+
+What the script does:
+
+1. `yarn install` + `yarn build` locally (backend → `dist/src/main.js`, frontend → `.next/BUILD_ID`).
+2. Writes `.patet-upload-sha` from local `git HEAD`.
+3. Uploads to `/var/www/patet-api/releases/<id>` and/or `/var/www/patet-website/releases/<id>`.
+4. SSH runs `./finalize-release.sh <target> <id>` on the server.
+
+**Typical cadence:** use `-SyncDeploymentScripts` when deployment scripts changed; otherwise routine deploy is just `-Target all`.
+
+### Resume after a failed upload
+
+If build succeeded but upload/finalize failed, reuse the same release id:
+
+```powershell
+.\deploy-from-windows.ps1 -Target backend -SkipBuild -ReleaseId 2026-05-20_041834
+```
+
+### Manual finalize (upload already on server)
+
+```bash
+cd /var/www/patet-deployment
+./finalize-release.sh backend 2026-05-20_143022
+./finalize-release.sh frontend 2026-05-20_143022
+./finalize-release.sh all 2026-05-20_143022
+./finalize-release.sh backend 2026-05-20_143022 --skip-migrate
+```
+
+---
+
+## Routine deploy on the server (no Windows build)
+
+Push app code to Bitbucket, then on Ubuntu:
+
+```bash
+cd /var/www/patet-deployment
+git pull
+./deploy.sh backend --with-migrate
+./deploy.sh frontend
+# or:
+./deploy.sh all --with-migrate
+```
+
+Default branches: `sevak_develop` (API), `develop_intermediate` (website) — see `deploy-config.sh`.
+
+| Situation | Prefer |
+|-----------|--------|
+| VPS OOM on `next build` | Windows `deploy-from-windows.ps1` |
+| No local Node / only server access | `./deploy.sh` on server |
+| Hotfix after git push only | `./deploy.sh` on server |
+
+---
+
+## SSH keys (Windows → Ubuntu)
+
+`deploy-from-windows.ps1` uses **OpenSSH** (`ssh` / `scp`), not PuTTY `.ppk` files.
+
+### Use an existing OpenSSH key
+
+In `deploy.local.env`:
+
+```env
+PATET_SSH_EXTRA_ARGS=-i C:\Users\YOU\.ssh\id_rsa
+```
+
+**Private key permissions:** OpenSSH rejects keys that other users can read. In PowerShell (replace path if needed):
+
+```powershell
+icacls "C:\Users\YOU\.ssh\id_rsa" /inheritance:r
+icacls "C:\Users\YOU\.ssh\id_rsa" /grant:r "${env:USERNAME}:(R)"
+```
+
+Test:
+
+```powershell
+ssh -i C:\Users\YOU\.ssh\id_rsa USER@HOST "echo ok"
+```
+
+### PuTTY `.ppk` only?
+
+Convert in **PuTTYgen**: Load `.ppk` → **Conversions** → **Export OpenSSH key** → save without `.ppk` extension, then point `PATET_SSH_EXTRA_ARGS` at that file.
+
+### New key (optional)
+
+```powershell
+ssh-keygen -t ed25519 -f "$env:USERPROFILE\.ssh\id_ed25519_patet" -C "patet-deploy"
+type $env:USERPROFILE\.ssh\id_ed25519_patet.pub | ssh USER@HOST "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+```
+
+### Install public key on server (one time)
+
+```powershell
+type C:\Users\YOU\.ssh\id_rsa.pub | ssh USER@HOST "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+```
+
+---
+
+## Upload: rsync vs tar+scp
+
+| Method | When |
+|--------|------|
+| **rsync** (native or WSL with `rsync` installed) | Faster; incremental |
+| **tar + scp** (automatic fallback) | Default on many Windows PCs; no WSL/rsync required |
+
+The Windows script tries rsync only if it is actually available (native `rsync` on PATH, or `rsync` inside WSL). If rsync fails or is missing, it falls back to tar+scp automatically.
+
+Optional faster uploads — install rsync in WSL:
+
+```bash
+wsl sudo apt update && wsl sudo apt install -y rsync
+```
+
+---
+
+## Health checks, status, rollback
+
+| Stack | Check |
+|-------|--------|
+| Backend | `curl -sS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:57303/api/v1/auth/me` → `200` or `401` |
+| Frontend | `curl -fsS http://127.0.0.1:4993/` |
+
+```bash
+cd /var/www/patet-deployment
+./deploy.sh status all
+pm2 logs patet-api --lines 100
+pm2 logs patet-website --lines 100
+```
+
+Rollback (same release folders as Windows upload):
+
+```bash
+./rollback.sh                    # interactive menu
+./rollback.sh backend <release_id>
+./rollback.sh frontend <release_id>
+```
+
+---
+
+## `deploy.local.env` reference
+
+Copy from `deploy.local.env.example`:
+
+| Variable | Purpose |
+|----------|---------|
+| `PATET_SSH_HOST` | VPS IP or hostname |
+| `PATET_SSH_USER` | SSH user (e.g. `root`, `deploy`) |
+| `PATET_SSH_EXTRA_ARGS` | e.g. `-i C:\Users\YOU\.ssh\id_rsa` |
+| `PATET_API_ROOT` | Default `/var/www/patet-api` |
+| `PATET_WEB_ROOT` | Default `/var/www/patet-website` |
+| `PATET_DEPLOYMENT_ROOT` | Default `/var/www/patet-deployment` |
+| `PATET_LOCAL_BACKEND` | Relative or absolute path to API repo |
+| `PATET_LOCAL_FRONTEND` | Relative or absolute path to website repo |
+| `PATET_WITH_BACKEND_MIGRATE` | `1` = run migrations on Windows artifact deploy (default) |
+
+---
+
+## Related scripts
+
+| File | Role |
+|------|------|
+| `deploy-config.sh` | Paths, branches, health URLs |
+| `deploy-common.sh` | Shared helpers (nvm PATH, activate, finalize) |
+| `deploy.sh` | Clone/build on **server**, symlink `current`, PM2 |
+| `finalize-release.sh` | Finalize **Windows-uploaded** release |
+| `deploy-from-windows.ps1` | Build on Windows, upload, SSH finalize |
+| `deploy.local.env.example` | Template for Windows SSH settings |
+| `bootstrap_release_layout.sh` | One-time `releases/` + `shared/` dirs |
+| `rollback.sh` | Point `current` at older release, PM2 reload |
+| `migrate_backend.sh` | Run migrations from `current` only |
+| `ecosystem.config.js` | PM2 cluster config for API + website |
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|----------------|-----|
+| `rsync: not found` (WSL) | WSL without rsync | Ignore — script falls back to tar+scp; or install rsync in WSL |
+| `pipefail: invalid option name` | Shell scripts have Windows **CRLF** | On server: `sed -i 's/\r$//' /var/www/patet-deployment/*.sh`; re-run with `-SyncDeploymentScripts` |
+| `Missing command: yarn` over SSH | **nvm** not loaded in non-interactive shell | Pull latest `deploy-common.sh` (auto-loads nvm) or run finalize from a login shell |
+| `Permission denied (publickey)` | Wrong key, or `.ppk` instead of OpenSSH key | Use `PATET_SSH_EXTRA_ARGS=-i ...\id_rsa`; fix key permissions (see [SSH keys](#ssh-keys-windows--ubuntu)) |
+| `UNPROTECTED PRIVATE KEY FILE` | Key readable by other Windows users | `icacls` commands in SSH section above |
+| `finalize-release.sh: command not found` | Stale/missing server scripts | `git pull` in `/var/www/patet-deployment` or `-SyncDeploymentScripts` |
+| Missing `dist` or `.next/BUILD_ID` | Local build failed or incomplete upload | Re-run without `-SkipBuild` |
+| Migration errors | DB/schema issue | Fix DB, `./rollback.sh backend`, redeploy; `--skip-migrate` only when intentional |
+| Hostname `patet-website` in `uname -a` | **Machine hostname**, not the PM2 app name | No action needed |
+
+---
+
+## Validate scripts locally (no VPS)
+
+```bash
+bash -n deploy.sh finalize-release.sh deploy-common.sh deploy-config.sh
+```
+
+```powershell
+powershell -NoProfile -File scripts/validate-deploy-scripts.ps1
+```
+
+Or:
+
+```powershell
+powershell -NoProfile -Command "& { $null = [System.Management.Automation.Language.Parser]::ParseFile('deploy-from-windows.ps1', [ref]$null, [ref]$errs); if ($errs) { $errs; exit 1 } }"
+```
+
+---
 
 ## Backend PM2: cluster mode (`patet-api`)
 
@@ -56,129 +354,6 @@ Disable: `PATET_BUILD_SCALE_PM2_DOWN=0 ./deploy.sh frontend`
 
 `pm2 reload` / `startOrReload` at the end still applies the ecosystem config.
 
-## Related scripts
+## Frontend build memory cap
 
-- `deploy-config.sh` — paths, branches, health URLs (override with `PATET_API_ROOT`, etc.)
-- `deploy-common.sh` — shared activate/finalize helpers (sourced by other scripts)
-- `deploy.sh` — clone/build releases on the **server**, symlink `current`, PM2 reload/start. Optional **`--with-migrate`** (or `PATET_WITH_BACKEND_MIGRATE=1`) on backend deploy: run `yarn migration:run` on `current`, then `pm2 reload` (default: migrations off).
-- `finalize-release.sh` — finalize a **Windows-uploaded** release (`yarn install` on Linux, symlink, migrate, PM2). Default: **runs backend migrations**.
-- `deploy-from-windows.ps1` — build on Windows, upload, SSH to `finalize-release.sh`
-- `deploy.local.env.example` — copy to `deploy.local.env` (gitignored) for SSH host/user
-- `rollback.sh` — point `current` at a release, PM2 reload/start. On a TTY, run `./rollback.sh` with **no arguments** for an interactive menu (list releases with current/stable flags, set stable marker, or rollback) using numbered choices only; `backend|frontend|all|stable|status` with explicit arguments still work for automation.
-- `migrate_backend.sh` — run TypeORM migrations from `current` (standalone)
-
----
-
-## Deploy from Windows (build locally, push to Ubuntu)
-
-Use this when the VPS struggles with Next.js build RAM, or when you want faster iteration from a dev PC.
-
-**Do not upload `node_modules` from Windows.** Backend uses native modules (e.g. bcrypt); the server always runs `yarn install` on Linux inside the release directory.
-
-### Windows prerequisites
-
-| Item | Notes |
-|------|--------|
-| Node ≥ 20.12.2 | Matches `patet-website` engines |
-| Yarn | Both app repos |
-| Git | For `.patet-upload-sha` / status |
-| OpenSSH (`ssh`, `scp`) | Built into Windows 10+ |
-| Optional `rsync` or WSL | Faster uploads than tar+scp fallback |
-
-### One-time setup
-
-1. On the **server**: ensure release layout exists (`bootstrap_release_layout.sh`), shared `.env` files, PM2 apps, and this repo at `/var/www/patet-deployment` (`git pull` or copy scripts).
-2. On **Windows**: in `patet-deployment`, copy `deploy.local.env.example` → `deploy.local.env` and set `PATET_SSH_HOST`, `PATET_SSH_USER`.
-3. SSH key login to the VPS with write access to `/var/www/patet-api`, `/var/www/patet-website`, `/var/www/patet-deployment`.
-
-**First Windows deploy:** sync server scripts if the server repo is stale:
-
-```powershell
-cd patet-deployment
-.\deploy-from-windows.ps1 -Target all -SyncDeploymentScripts
-```
-
-Or on the server: `cd /var/www/patet-deployment && git pull`.
-
-### Routine Windows deploy
-
-```powershell
-cd c:\path\to\Back_and_Front\patet-deployment
-.\deploy-from-windows.ps1 -Target all
-```
-
-| Flag | Effect |
-|------|--------|
-| `-Target backend` / `frontend` / `all` | What to build and ship |
-| `-SkipBuild` | Upload only (already built) |
-| `-SkipMigrate` | Backend finalize without `yarn migration:run` |
-| `-SkipUpload` | Build only, no upload/finalize |
-| `-ReleaseId 2026-05-19_120000` | Fixed release folder name |
-| `-SyncDeploymentScripts` | Copy `finalize-release.sh` + helpers to the server |
-
-Flow:
-
-1. `yarn build` locally (backend → `dist/src/main.js`, frontend → `.next/BUILD_ID`).
-2. Write `.patet-upload-sha` from local `git HEAD`.
-3. Upload to `/var/www/patet-api/releases/<id>` and `/var/www/patet-website/releases/<id>` (rsync or tar+scp).
-4. SSH: `./finalize-release.sh all <id>` — Linux `yarn install`, symlink shared `.env`, **migrations**, PM2 reload, health checks.
-
-Manual finalize on the server (if upload was done separately):
-
-```bash
-cd /var/www/patet-deployment
-./finalize-release.sh backend 2026-05-19_143022
-./finalize-release.sh frontend 2026-05-19_143022
-# or: ./finalize-release.sh all 2026-05-19_143022
-./finalize-release.sh backend 2026-05-19_143022 --skip-migrate
-```
-
-### Fallback: git push + server `deploy.sh`
-
-When you do not want a Windows build:
-
-1. Push to Bitbucket (`sevak_develop` / `develop_intermediate` by default in `deploy-config.sh`).
-2. SSH to Ubuntu:
-
-```bash
-cd /var/www/patet-deployment
-git pull
-./deploy.sh backend --with-migrate
-./deploy.sh frontend
-# or: ./deploy.sh all --with-migrate
-```
-
-| Situation | Prefer |
-|-----------|--------|
-| VPS OOM on `next build` | Windows `deploy-from-windows.ps1` |
-| No local Node / CI on Linux | `./deploy.sh` on server |
-| Hotfix after git push only | `./deploy.sh` on server |
-
-### Health checks and rollback
-
-| Stack | Check |
-|-------|--------|
-| Backend | `curl -sS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:57303/api/v1/auth/me` → `200` or `401` |
-| Frontend | `curl -fsS http://127.0.0.1:4993/` |
-
-Status: `./deploy.sh status all`
-
-Rollback: `./rollback.sh` (interactive) or `./rollback.sh backend <release_id>` — same release folders as Windows upload.
-
-### Troubleshooting
-
-- **`finalize-release.sh: command not found`** — `git pull` in `/var/www/patet-deployment` or re-run with `-SyncDeploymentScripts`.
-- **Missing `dist` or `.next/BUILD_ID` on server** — build failed on Windows or upload excluded artifacts; re-run without `-SkipBuild`.
-- **Migration errors** — fix DB issue, `./rollback.sh backend`, or redeploy previous release; use `--skip-migrate` only when intentional.
-- **`pm2 logs patet-api` / `patet-website`** — runtime errors after activate.
-- **Hostname `patet-website` in `uname -a`** — that is the **machine name**, not only the frontend app.
-
-### Validate scripts locally (no VPS)
-
-```bash
-bash -n deploy.sh finalize-release.sh deploy-common.sh deploy-config.sh
-```
-
-```powershell
-powershell -NoProfile -Command "& { $null = [System.Management.Automation.Language.Parser]::ParseFile('deploy-from-windows.ps1', [ref]$null, [ref]$errs); if ($errs) { $errs; exit 1 } }"
-```
+Deploy sets **`BUILD_MEM_MAX=2G`** and **`BUILD_CPU_MAX_PERCENT=40`** (40% per logical CPU) for builds unless you override. Example: `BUILD_MEM_MAX=1536M ./deploy.sh frontend`
