@@ -123,13 +123,17 @@ function Invoke-YarnBuild {
     Push-Location $RepoPath
     try {
         Assert-Command yarn
-        yarn install
+        # DevDependencies (typescript, @nestjs/cli, etc.) are required for yarn build.
+        Remove-Item Env:NODE_ENV -ErrorAction SilentlyContinue
         if ($Kind -eq 'frontend') {
-            $env:NODE_ENV = 'production'
             foreach ($lock in @('package-lock.json', 'npm-shrinkwrap.json')) {
                 $p = Join-Path $RepoPath $lock
                 if (Test-Path $p) { Remove-Item $p -Force }
             }
+        }
+        yarn install
+        if ($Kind -eq 'frontend') {
+            $env:NODE_ENV = 'production'
         }
         yarn build
         if ($Kind -eq 'backend') {
@@ -151,12 +155,56 @@ function Invoke-YarnBuild {
     }
 }
 
-function Get-RsyncExecutable {
-    if (Get-Command rsync -ErrorAction SilentlyContinue) { return 'rsync' }
+function Get-SshOptionArgs {
+    $extra = $env:PATET_SSH_EXTRA_ARGS
+    if (-not $extra) { return @() }
+    return @($extra -split '\s+')
+}
+
+function Get-RsyncRshArg {
+    $sshOpts = Get-SshOptionArgs
+    if ($sshOpts.Count -eq 0) { return @() }
+    return @('-e', ('ssh ' + ($sshOpts -join ' ')))
+}
+
+function Invoke-WslQuiet {
+    param([string[]] $WslArgs)
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    try {
+        & wsl @WslArgs 2>$null | Out-Null
+        return $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $prevEap
+    }
+}
+
+function Get-RsyncMode {
+    if (Get-Command rsync -ErrorAction SilentlyContinue) { return 'native' }
     if (Get-Command wsl -ErrorAction SilentlyContinue) {
-        return 'wsl'
+        if ((Invoke-WslQuiet -WslArgs @('-e', 'sh', '-c', 'command -v rsync >/dev/null 2>&1')) -eq 0) {
+            return 'wsl'
+        }
     }
     return $null
+}
+
+function Convert-WindowsPathForWsl {
+    param([string] $WindowsPath)
+    $normalized = $WindowsPath.TrimEnd('\', '/')
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    try {
+        $out = (wsl wslpath -a "$normalized" 2>$null).Trim()
+        if ($LASTEXITCODE -ne 0 -or -not $out -or $out -notmatch '^/') {
+            return $null
+        }
+        return $out
+    }
+    finally {
+        $ErrorActionPreference = $prevEap
+    }
 }
 
 function Invoke-RsyncRelease {
@@ -173,29 +221,43 @@ function Invoke-RsyncRelease {
         '--exclude', '.cursor/',
         '--exclude', '*.log'
     )
-    $rsync = Get-RsyncExecutable
-    if (-not $rsync) {
+    $mode = Get-RsyncMode
+    if (-not $mode) {
         return $false
     }
 
     $localTrail = $LocalPath.TrimEnd('\') + [IO.Path]::DirectorySeparatorChar
     $remote = "${SshTarget}:${RemotePath}/"
+    $rsh = Get-RsyncRshArg
 
-    if ($rsync -eq 'wsl') {
-        $wslLocal = wsl wslpath -a $localTrail
-        $args = @(
-            'rsync', '-avz', '--delete'
-        ) + $excludes + @($wslLocal, $remote)
-        Write-Host "wsl $($args -join ' ')"
-        & wsl @args
+    try {
+        if ($mode -eq 'wsl') {
+            $wslLocal = Convert-WindowsPathForWsl -WindowsPath $localTrail
+            if (-not $wslLocal) {
+                Write-Warning 'wslpath failed; falling back to tar+scp.'
+                return $false
+            }
+            $args = @(
+                'rsync', '-avz', '--delete'
+            ) + $rsh + $excludes + @($wslLocal, $remote)
+            Write-Host "wsl $($args -join ' ')"
+            & wsl @args
+        }
+        else {
+            $args = @('-avz', '--delete') + $rsh + $excludes + @($localTrail, $remote)
+            Write-Host "rsync $($args -join ' ')"
+            & rsync @args
+        }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "rsync failed (exit $LASTEXITCODE); falling back to tar+scp."
+            return $false
+        }
+        return $true
     }
-    else {
-        $args = @('-avz', '--delete') + $excludes + @($localTrail, $remote)
-        Write-Host "rsync $($args -join ' ')"
-        & rsync @args
+    catch {
+        Write-Warning "rsync error: $_; falling back to tar+scp."
+        return $false
     }
-    if ($LASTEXITCODE -ne 0) { throw "rsync failed with exit code $LASTEXITCODE" }
-    return $true
 }
 
 function Invoke-ScpTarRelease {
@@ -226,14 +288,15 @@ function Invoke-ScpTarRelease {
         & tar @tarArgs
         if ($LASTEXITCODE -ne 0) { throw "tar create failed" }
 
+        $sshOpts = Get-SshOptionArgs
         $remoteParent = ($RemotePath -replace '/[^/]+$','')
-        & ssh $SshTarget "mkdir -p '$remoteParent' '$RemotePath'"
+        & ssh @sshOpts $SshTarget "mkdir -p '$remoteParent' '$RemotePath'"
         if ($LASTEXITCODE -ne 0) { throw "ssh mkdir failed" }
 
-        & scp $archive "${SshTarget}:/tmp/patet-release.tgz"
+        & scp @sshOpts $archive "${SshTarget}:/tmp/patet-release.tgz"
         if ($LASTEXITCODE -ne 0) { throw "scp failed" }
 
-        & ssh $SshTarget "rm -rf '$RemotePath' && mkdir -p '$RemotePath' && tar -xzf /tmp/patet-release.tgz -C '$RemotePath' && rm -f /tmp/patet-release.tgz"
+        & ssh @sshOpts $SshTarget "rm -rf '$RemotePath' && mkdir -p '$RemotePath' && tar -xzf /tmp/patet-release.tgz -C '$RemotePath' && rm -f /tmp/patet-release.tgz"
         if ($LASTEXITCODE -ne 0) { throw "remote extract failed" }
     }
     finally {
@@ -282,10 +345,10 @@ function Sync-DeploymentScriptsToServer {
         $local = Join-Path $DeploymentDir $f
         if (-not (Test-Path $local)) { continue }
         Write-Host "Uploading deployment script $f"
-        & scp $local "${SshTarget}:${dest}/$f"
+        & scp @(Get-SshOptionArgs) $local "${SshTarget}:${dest}/$f"
         if ($LASTEXITCODE -ne 0) { throw "scp $f failed" }
     }
-    Invoke-Ssh "chmod +x '$dest/finalize-release.sh' 2>/dev/null || true"
+    Invoke-Ssh "sed -i 's/\r$//' '$dest'/*.sh 2>/dev/null || true; chmod +x '$dest/finalize-release.sh' '$dest/deploy.sh' '$dest/rollback.sh' 2>/dev/null || true"
 }
 
 # --- main ---

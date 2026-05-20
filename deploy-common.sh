@@ -5,6 +5,19 @@ _DEPLOY_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=deploy-config.sh
 source "$_DEPLOY_COMMON_DIR/deploy-config.sh"
 
+# Non-interactive SSH (e.g. deploy-from-windows.ps1) does not load login profiles; nvm is common on Patet VPS.
+patet_ensure_node_in_path() {
+  if command -v node >/dev/null 2>&1 && command -v yarn >/dev/null 2>&1; then
+    return 0
+  fi
+  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  if [[ -s "$NVM_DIR/nvm.sh" ]]; then
+    # shellcheck source=/dev/null
+    . "$NVM_DIR/nvm.sh"
+  fi
+}
+patet_ensure_node_in_path
+
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || { echo "Missing command: $1"; exit 1; }
 }
@@ -159,8 +172,6 @@ ensure_frontend_shared_env() {
 yarn_install_backend_release() {
   local release_dir="$1"
   cd "$release_dir"
-  export BUILD_MEM_MAX="${BUILD_MEM_MAX:-2G}"
-  export BUILD_CPU_MAX_PERCENT="${BUILD_CPU_MAX_PERCENT:-40}"
   yarn install
 }
 
@@ -168,9 +179,6 @@ yarn_install_frontend_release() {
   local release_dir="$1"
   cd "$release_dir"
   remove_non_yarn_lockfiles "$release_dir"
-  export NODE_ENV=production
-  export BUILD_MEM_MAX="${BUILD_MEM_MAX:-2G}"
-  export BUILD_CPU_MAX_PERCENT="${BUILD_CPU_MAX_PERCENT:-40}"
   yarn install --non-interactive
 }
 

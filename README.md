@@ -56,10 +56,6 @@ Disable: `PATET_BUILD_SCALE_PM2_DOWN=0 ./deploy.sh frontend`
 
 `pm2 reload` / `startOrReload` at the end still applies the ecosystem config.
 
-## Frontend build memory cap
-
-Deploy sets **`BUILD_MEM_MAX=2G`** and **`BUILD_CPU_MAX_PERCENT=40`** (40% per logical CPU) for builds unless you override. Example: `BUILD_MEM_MAX=1536M ./deploy.sh frontend`
-
 ## Related scripts
 
 - `deploy-config.sh` — paths, branches, health URLs (override with `PATET_API_ROOT`, etc.)

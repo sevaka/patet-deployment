@@ -20,8 +20,6 @@ deploy_usage() {
   echo "Environment:"
   echo "  PATET_WITH_BACKEND_MIGRATE=1|true   Same as --with-migrate (for backend deploy)"
   echo "  PATET_BUILD_SCALE_PM2_DOWN=0        Skip PM2 scale to 1 before build (default: scale down/up; errors ignored)"
-  echo "  BUILD_MEM_MAX=2G                    Default build RAM cap (frontend deploy; backend uses script default)"
-  echo "  BUILD_CPU_MAX_PERCENT=40            Default build CPU % per logical CPU (in app package.json scripts)"
   echo
   echo "Windows artifact deploy: see deploy-from-windows.ps1 and finalize-release.sh"
 }
@@ -79,8 +77,6 @@ deploy_backend() {
   symlink_shared_files "$API_ROOT/shared" "$release_dir" "${BACKEND_SHARED_FILES[@]}"
 
   cd "$release_dir"
-  export BUILD_MEM_MAX="${BUILD_MEM_MAX:-2G}"
-  export BUILD_CPU_MAX_PERCENT="${BUILD_CPU_MAX_PERCENT:-40}"
   yarn install
 
   yarn build || build_rc=$?
@@ -132,14 +128,12 @@ deploy_frontend() {
   remove_non_yarn_lockfiles "$release_dir"
   rm -rf "$release_dir/.next"
 
-  export NODE_ENV=production
-  export BUILD_MEM_MAX="${BUILD_MEM_MAX:-2G}"
-  export BUILD_CPU_MAX_PERCENT="${BUILD_CPU_MAX_PERCENT:-40}"
   if [[ -n "${NEXT_BUILD_NODE_OPTIONS:-}" ]]; then
     export NODE_OPTIONS="${NEXT_BUILD_NODE_OPTIONS}"
   fi
 
   yarn install --non-interactive
+  export NODE_ENV=production
   yarn build || build_rc=$?
 
   if [[ "${build_rc:-0}" -ne 0 ]]; then
