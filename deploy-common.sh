@@ -182,6 +182,44 @@ yarn_install_frontend_release() {
   yarn install --non-interactive
 }
 
+# patet_prepare_uploaded_backend <release_name>
+# Symlinks shared files and runs yarn install only. Does NOT activate (no PM2/symlink/migrate).
+patet_prepare_uploaded_backend() {
+  local release_name="$1"
+  local release_dir="$API_ROOT/releases/$release_name"
+
+  require_cmd yarn
+
+  if [[ ! -d "$release_dir" ]]; then
+    echo "Backend release directory does not exist: $release_dir"
+    exit 1
+  fi
+
+  patet_log "Installing backend release $release_name"
+  ensure_backend_shared_env
+  symlink_shared_files "$API_ROOT/shared" "$release_dir" "${BACKEND_SHARED_FILES[@]}"
+  yarn_install_backend_release "$release_dir"
+}
+
+# patet_prepare_uploaded_frontend <release_name>
+# Symlinks shared files and runs yarn install only. Does NOT activate (no PM2/symlink).
+patet_prepare_uploaded_frontend() {
+  local release_name="$1"
+  local release_dir="$WEB_ROOT/releases/$release_name"
+
+  require_cmd yarn
+
+  if [[ ! -d "$release_dir" ]]; then
+    echo "Frontend release directory does not exist: $release_dir"
+    exit 1
+  fi
+
+  patet_log "Installing frontend release $release_name"
+  ensure_frontend_shared_env
+  symlink_shared_files "$WEB_ROOT/shared" "$release_dir" "${FRONTEND_SHARED_FILES[@]}"
+  yarn_install_frontend_release "$release_dir"
+}
+
 reload_backend_pm2() {
   if pm2 describe patet-api >/dev/null 2>&1; then
     pm2 reload "$PM2_ECOSYSTEM" --only patet-api --update-env
@@ -240,22 +278,13 @@ patet_finalize_uploaded_backend() {
   local release_dir="$API_ROOT/releases/$release_name"
   local _old_backend_info _old_backend_dir
 
-  require_cmd yarn
   require_cmd pm2
   require_cmd curl
-
-  if [[ ! -d "$release_dir" ]]; then
-    echo "Backend release directory does not exist: $release_dir"
-    exit 1
-  fi
 
   _old_backend_dir="$(readlink -f "$API_ROOT/current" 2>/dev/null || true)"
   capture_release_git_info _old_backend_info "Backend (patet-api)" "$_old_backend_dir"
 
-  patet_log "Finalizing uploaded backend release $release_name"
-  ensure_backend_shared_env
-  symlink_shared_files "$API_ROOT/shared" "$release_dir" "${BACKEND_SHARED_FILES[@]}"
-  yarn_install_backend_release "$release_dir"
+  patet_prepare_uploaded_backend "$release_name"
   patet_activate_backend_release "$release_dir" "$with_migrate"
 
   echo "Backend finalize complete: $release_dir"
@@ -273,22 +302,13 @@ patet_finalize_uploaded_frontend() {
   local release_dir="$WEB_ROOT/releases/$release_name"
   local _old_frontend_info _old_frontend_dir
 
-  require_cmd yarn
   require_cmd pm2
   require_cmd curl
-
-  if [[ ! -d "$release_dir" ]]; then
-    echo "Frontend release directory does not exist: $release_dir"
-    exit 1
-  fi
 
   _old_frontend_dir="$(readlink -f "$WEB_ROOT/current" 2>/dev/null || true)"
   capture_release_git_info _old_frontend_info "Frontend (patet-website)" "$_old_frontend_dir"
 
-  patet_log "Finalizing uploaded frontend release $release_name"
-  ensure_frontend_shared_env
-  symlink_shared_files "$WEB_ROOT/shared" "$release_dir" "${FRONTEND_SHARED_FILES[@]}"
-  yarn_install_frontend_release "$release_dir"
+  patet_prepare_uploaded_frontend "$release_name"
   patet_activate_frontend_release "$release_dir"
 
   echo "Frontend finalize complete: $release_dir"

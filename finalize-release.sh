@@ -54,6 +54,11 @@ fi
 migrate_flag=false
 [[ "$WITH_BACKEND_MIGRATE" == "true" ]] && migrate_flag=true
 
+_old_backend_dir=""
+_old_backend_info=""
+_old_frontend_dir=""
+_old_frontend_info=""
+
 case "$ACTION" in
   backend)
     patet_finalize_uploaded_backend "$RELEASE_NAME" "$migrate_flag"
@@ -62,8 +67,35 @@ case "$ACTION" in
     patet_finalize_uploaded_frontend "$RELEASE_NAME"
     ;;
   all)
-    patet_finalize_uploaded_backend "$RELEASE_NAME" "$migrate_flag"
-    patet_finalize_uploaded_frontend "$RELEASE_NAME"
+    require_cmd pm2
+    require_cmd curl
+
+    _old_backend_dir="$(readlink -f "$API_ROOT/current" 2>/dev/null || true)"
+    capture_release_git_info _old_backend_info "Backend (patet-api)" "$_old_backend_dir"
+    _old_frontend_dir="$(readlink -f "$WEB_ROOT/current" 2>/dev/null || true)"
+    capture_release_git_info _old_frontend_info "Frontend (patet-website)" "$_old_frontend_dir"
+
+    # Phase 1: yarn install both (fail fast before any PM2 change)
+    patet_prepare_uploaded_backend "$RELEASE_NAME"
+    patet_prepare_uploaded_frontend "$RELEASE_NAME"
+
+    # Phase 2: activate both
+    patet_activate_backend_release "$API_ROOT/releases/$RELEASE_NAME" "$migrate_flag"
+    patet_activate_frontend_release "$WEB_ROOT/releases/$RELEASE_NAME"
+
+    echo "Backend + Frontend finalize complete: $RELEASE_NAME"
+    echo
+    echo "==== Changed from: Backend (patet-api) release ===="
+    echo "$_old_backend_info" | grep -v '^====' || true
+    echo
+    echo "==== New Running: Backend (patet-api) release ===="
+    _build_release_git_info_lines "Backend (patet-api)" "$(readlink -f "$API_ROOT/current")"
+    echo
+    echo "==== Changed from: Frontend (patet-website) release ===="
+    echo "$_old_frontend_info" | grep -v '^====' || true
+    echo
+    echo "==== New Running: Frontend (patet-website) release ===="
+    _build_release_git_info_lines "Frontend (patet-website)" "$(readlink -f "$WEB_ROOT/current")"
     ;;
   *)
     echo "Unknown action: $ACTION"

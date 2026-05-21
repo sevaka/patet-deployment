@@ -78,12 +78,17 @@ function Resolve-RepoPath([string] $RelativeOrAbsolute) {
 function Get-ReleaseTimestamp {
     if ($ReleaseId) { return $ReleaseId }
     $now = [DateTime]::UtcNow
-    try {
-        $tz = [TimeZoneInfo]::FindSystemTimeZoneById('Asia/Yerevan')
-        $now = [TimeZoneInfo]::ConvertTimeFromUtc($now, $tz)
+    # Windows uses "Caucasus Standard Time"; IANA "Asia/Yerevan" works on .NET 6+ / PowerShell 7+.
+    foreach ($tzId in @('Caucasus Standard Time', 'Asia/Yerevan')) {
+        try {
+            $tz = [TimeZoneInfo]::FindSystemTimeZoneById($tzId)
+            $now = [TimeZoneInfo]::ConvertTimeFromUtc($now, $tz)
+            break
+        }
+        catch { }
     }
-    catch {
-        Write-Warning 'Timezone Asia/Yerevan not found; using UTC for release id.'
+    if ($now.Kind -eq [DateTimeKind]::Utc) {
+        Write-Warning 'Could not resolve Asia/Yerevan timezone; release id will use UTC.'
     }
     return $now.ToString('yyyy-MM-dd_HHmmss')
 }
@@ -151,6 +156,9 @@ Stop the dev server, delete .next\trace manually, then retry deploy.
             $env:NODE_ENV = 'production'
         }
         yarn build
+        if ($Kind -eq 'frontend') {
+            Remove-Item Env:NODE_ENV -ErrorAction SilentlyContinue
+        }
         if ($Kind -eq 'backend') {
             $mainJs = Join-Path $RepoPath 'dist\src\main.js'
             if (-not (Test-Path $mainJs)) {
