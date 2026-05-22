@@ -13,8 +13,8 @@
 .PARAMETER SkipBuild
   Upload only (artifacts must already exist locally).
 
-.PARAMETER SkipMigrate
-  Pass --skip-migrate to server finalize (backend only).
+.PARAMETER Migrate
+  Run backend migrations during finalize (default: skip migrations).
 
 .PARAMETER SkipUpload
   Build only; do not upload or finalize.
@@ -24,6 +24,9 @@
 
 .PARAMETER SyncDeploymentScripts
   Rsync patet-deployment scripts to PATET_DEPLOYMENT_ROOT on the server before finalize.
+
+.NOTES
+  Run with no parameters to open an interactive menu (target, migrations, sync scripts, deploy mode).
 #>
 [CmdletBinding()]
 param(
@@ -32,7 +35,7 @@ param(
     [string] $Target = 'all',
 
     [switch] $SkipBuild,
-    [switch] $SkipMigrate,
+    [switch] $Migrate,
     [switch] $SkipUpload,
     [switch] $SyncDeploymentScripts,
 
@@ -380,6 +383,143 @@ function Invoke-Ssh {
     if ($LASTEXITCODE -ne 0) { throw "ssh failed with exit code $LASTEXITCODE" }
 }
 
+function Read-NumberChoice {
+    param(
+        [string] $Title,
+        [string[]] $Options,
+        [int] $DefaultIndex = 1
+    )
+    Write-Host ''
+    Write-Host $Title
+    for ($i = 0; $i -lt $Options.Count; $i++) {
+        $n = $i + 1
+        $mark = if ($n -eq $DefaultIndex) { ' (default)' } else { '' }
+        Write-Host ("  [{0}] {1}{2}" -f $n, $Options[$i], $mark)
+    }
+    $max = $Options.Count
+    while ($true) {
+        $raw = Read-Host ("Enter choice (1-{0}, Enter={1})" -f $max, $DefaultIndex)
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            return $DefaultIndex
+        }
+        if ($raw -match '^\d+$') {
+            $pick = [int]$raw
+            if ($pick -ge 1 -and $pick -le $max) {
+                return $pick
+            }
+        }
+        Write-Host "Invalid choice. Enter a number from 1 to $max." -ForegroundColor Yellow
+    }
+}
+
+function Write-DeploySummary {
+    param([string] $SummaryLine)
+
+    Write-Host ''
+    Write-Host 'Starting deploy:' -ForegroundColor Cyan
+    Write-Host "  $SummaryLine"
+}
+
+function Invoke-DeployInteractiveQuick {
+    param([bool] $WithMigrate)
+
+    $script:Target = 'all'
+    $script:Migrate = $WithMigrate
+    $script:SyncDeploymentScripts = $false
+    $script:SkipBuild = $false
+    $script:SkipUpload = $false
+
+    $migrateLabel = if ($WithMigrate) { 'yes' } else { 'no' }
+    Write-DeploySummary -SummaryLine "Quick: both stacks, full build + upload + finalize, migrations=$migrateLabel, no script sync"
+}
+
+function Invoke-DeployInteractiveDetailed {
+    $targetPick = Read-NumberChoice -Title 'What to deploy?' -Options @(
+        'Backend only (patet-api)',
+        'Frontend only (patet-website)',
+        'Both (backend + frontend)'
+    ) -DefaultIndex 3
+    switch ($targetPick) {
+        1 { $script:Target = 'backend' }
+        2 { $script:Target = 'frontend' }
+        default { $script:Target = 'all' }
+    }
+
+    $includesBackend = $script:Target -eq 'backend' -or $script:Target -eq 'all'
+    if ($includesBackend) {
+        $migratePick = Read-NumberChoice -Title 'Run backend migrations during finalize?' -Options @(
+            'No - skip migrations',
+            'Yes - run yarn migration:run on server'
+        ) -DefaultIndex 1
+        $script:Migrate = ($migratePick -eq 2)
+    }
+    else {
+        $script:Migrate = $false
+    }
+
+    $syncPick = Read-NumberChoice -Title 'Sync deployment scripts to server before finalize?' -Options @(
+        'No',
+        'Yes (finalize-release.sh, deploy-common.sh, etc.)'
+    ) -DefaultIndex 1
+    $script:SyncDeploymentScripts = ($syncPick -eq 2)
+
+    $modePick = Read-NumberChoice -Title 'Deploy mode?' -Options @(
+        'Full - build locally, upload, finalize on server',
+        'Build only - no upload or finalize',
+        'Upload + finalize only - skip local build (artifacts must exist)'
+    ) -DefaultIndex 1
+    switch ($modePick) {
+        2 {
+            $script:SkipBuild = $false
+            $script:SkipUpload = $true
+        }
+        3 {
+            $script:SkipBuild = $true
+            $script:SkipUpload = $false
+        }
+        default {
+            $script:SkipBuild = $false
+            $script:SkipUpload = $false
+        }
+    }
+
+    if ($script:SkipBuild -and -not $script:ReleaseId) {
+        $reuse = Read-NumberChoice -Title 'Reuse an existing release folder on the server?' -Options @(
+            'No - generate a new release id (timestamp)',
+            'Yes - enter an existing release id'
+        ) -DefaultIndex 1
+        if ($reuse -eq 2) {
+            $script:ReleaseId = (Read-Host 'Release id (e.g. 2026-05-22_161454)').Trim()
+            if ([string]::IsNullOrWhiteSpace($script:ReleaseId)) {
+                throw 'Release id is required when skipping build without a new timestamp.'
+            }
+        }
+    }
+
+    $migrateSummary = if ($includesBackend) { if ($Migrate) { 'yes' } else { 'no' } } else { 'n/a' }
+    $modeSummary = if ($SkipUpload) { 'build only' } elseif ($SkipBuild) { 'upload + finalize' } else { 'full' }
+    $summary = "Target=$Target, migrations=$migrateSummary, sync scripts=$(if ($SyncDeploymentScripts) { 'yes' } else { 'no' }), mode=$modeSummary"
+    if ($ReleaseId) { $summary += ", release id=$ReleaseId" }
+    Write-DeploySummary -SummaryLine $summary
+}
+
+function Invoke-DeployInteractivePrompts {
+    Write-Host ''
+    Write-Host 'Patet Windows deploy' -ForegroundColor Cyan
+
+    $entryPick = Read-NumberChoice -Title 'What do you want to do?' -Options @(
+        'Quick: build + deploy all (backend + frontend, no migrations)',
+        'Quick: build + deploy all (backend + frontend, with migrations)',
+        'More options (target, migrations, sync scripts, deploy mode)'
+    ) -DefaultIndex 1
+
+    switch ($entryPick) {
+        1 { Invoke-DeployInteractiveQuick -WithMigrate:$false }
+        2 { Invoke-DeployInteractiveQuick -WithMigrate:$true }
+        default { Invoke-DeployInteractiveDetailed }
+    }
+}
+
 function Sync-DeploymentScriptsToServer {
     param([string] $SshTarget)
     $dest = $env:PATET_DEPLOYMENT_ROOT
@@ -406,6 +546,10 @@ Import-DeployLocalEnv -Path (Join-Path $DeploymentDir 'deploy.local.env')
 
 if (-not $env:PATET_SSH_HOST -or -not $env:PATET_SSH_USER) {
     throw 'PATET_SSH_HOST and PATET_SSH_USER must be set in deploy.local.env'
+}
+
+if ($PSBoundParameters.Count -eq 0) {
+    Invoke-DeployInteractivePrompts
 }
 
 $apiRoot = if ($env:PATET_API_ROOT) { $env:PATET_API_ROOT } else { '/var/www/patet-api' }
@@ -451,7 +595,7 @@ if ($doFrontend) {
 }
 
 $finalizeArgs = @($Target, $release)
-if ($SkipMigrate) { $finalizeArgs += '--skip-migrate' }
+if ($Migrate) { $finalizeArgs += '--with-migrate' }
 
 $finalizeCmd = "cd '$deployRoot' && bash ./finalize-release.sh $($finalizeArgs -join ' ')"
 Write-Step "Finalizing on server"

@@ -14,20 +14,20 @@ finalize_usage() {
   echo "           $0 all 2026-05-19_143022"
   echo
   echo "Options:"
-  echo "  --skip-migrate   Do not run backend migrations (default: run migrations on backend finalize)"
+  echo "  --with-migrate   Run backend migrations during finalize (default: skip)"
   echo "  -h, --help       Show this help and exit"
   echo
   echo "Environment:"
-  echo "  PATET_WITH_BACKEND_MIGRATE=0|false   Same as --skip-migrate"
+  echo "  PATET_WITH_BACKEND_MIGRATE=1|true   Same as --with-migrate"
   echo "  PATET_API_ROOT, PATET_WEB_ROOT       Override app roots (see deploy-config.sh)"
 }
 
-WITH_BACKEND_MIGRATE=true
+WITH_BACKEND_MIGRATE=false
 POSITIONAL=()
 for arg in "$@"; do
   case "$arg" in
-    --skip-migrate)
-      WITH_BACKEND_MIGRATE=false
+    --with-migrate)
+      WITH_BACKEND_MIGRATE=true
       ;;
     -h|--help)
       finalize_usage
@@ -39,8 +39,8 @@ for arg in "$@"; do
   esac
 done
 
-if [[ "${PATET_WITH_BACKEND_MIGRATE:-}" == "0" || "${PATET_WITH_BACKEND_MIGRATE:-}" == "false" ]]; then
-  WITH_BACKEND_MIGRATE=false
+if [[ "${PATET_WITH_BACKEND_MIGRATE:-}" == "1" || "${PATET_WITH_BACKEND_MIGRATE:-}" == "true" ]]; then
+  WITH_BACKEND_MIGRATE=true
 fi
 
 ACTION="${POSITIONAL[0]:-}"

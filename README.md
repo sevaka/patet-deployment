@@ -78,18 +78,20 @@ Then run a full deploy (backend, frontend, or both).
 
 ## Routine deploy from Windows
 
-Default flow: **local build → upload → finalize on Linux** (`yarn install`, symlink `.env`, migrations, PM2 reload).
+Default flow: **local build → upload → finalize on Linux** (`yarn install`, symlink `.env`, PM2 reload). Migrations run only with **`-Migrate`** or server **`--with-migrate`**.
 
 ```powershell
 cd c:\path\to\Front_and_Back\patet-deployment
 .\deploy-from-windows.ps1 -Target all
 ```
 
+**Interactive (no parameters):** run `.\deploy-from-windows.ps1` alone — first menu offers two **quick** full deploy shortcuts (all stacks, with or without migrations) or **more options** for target, sync scripts, and deploy mode.
+
 | Flag | When to use |
 |------|----------------|
 | `-Target backend` / `frontend` / `all` | Ship one stack or both |
 | `-SkipBuild` | Artifacts already built locally |
-| `-SkipMigrate` | Backend finalize without `yarn migration:run` |
+| `-Migrate` | Run `yarn migration:run` on backend finalize |
 | `-SkipUpload` | Build only; no upload or finalize |
 | `-ReleaseId 2026-05-20_120000` | Reuse or fix a specific release folder |
 | `-SyncDeploymentScripts` | Push updated `finalize-release.sh`, `deploy-common.sh`, etc. to the server |
@@ -118,7 +120,7 @@ cd /var/www/patet-deployment
 ./finalize-release.sh backend 2026-05-20_143022
 ./finalize-release.sh frontend 2026-05-20_143022
 ./finalize-release.sh all 2026-05-20_143022
-./finalize-release.sh backend 2026-05-20_143022 --skip-migrate
+./finalize-release.sh backend 2026-05-20_143022 --with-migrate
 ```
 
 ---
@@ -245,7 +247,7 @@ Copy from `deploy.local.env.example`:
 | `PATET_DEPLOYMENT_ROOT` | Default `/var/www/patet-deployment` |
 | `PATET_LOCAL_BACKEND` | Relative or absolute path to API repo |
 | `PATET_LOCAL_FRONTEND` | Relative or absolute path to website repo |
-| `PATET_WITH_BACKEND_MIGRATE` | `1` = run migrations on Windows artifact deploy (default) |
+| `PATET_WITH_BACKEND_MIGRATE` | `1` = run migrations on finalize (default `0`; prefer `-Migrate` on Windows) |
 
 ---
 
@@ -278,7 +280,7 @@ Copy from `deploy.local.env.example`:
 | `UNPROTECTED PRIVATE KEY FILE` | Key readable by other Windows users | `icacls` commands in SSH section above |
 | `finalize-release.sh: command not found` | Stale/missing server scripts | `git pull` in `/var/www/patet-deployment` or `-SyncDeploymentScripts` |
 | Missing `dist` or `.next/BUILD_ID` | Local build failed or incomplete upload | Re-run without `-SkipBuild` |
-| Migration errors | DB/schema issue | Fix DB, `./rollback.sh backend`, redeploy; `--skip-migrate` only when intentional |
+| Migration errors | DB/schema issue | Fix DB, `./rollback.sh backend`, redeploy without `-Migrate` / `--with-migrate` |
 | Hostname `patet-website` in `uname -a` | **Machine hostname**, not the PM2 app name | No action needed |
 
 ---
