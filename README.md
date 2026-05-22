@@ -360,3 +360,54 @@ Disable: `PATET_BUILD_SCALE_PM2_DOWN=0 ./deploy.sh frontend`
 ## Frontend build memory cap
 
 Deploy sets **`BUILD_MEM_MAX=2G`** and **`BUILD_CPU_MAX_PERCENT=40`** (40% per logical CPU) for builds unless you override. Example: `BUILD_MEM_MAX=1536M ./deploy.sh frontend`
+
+---
+
+## PostgreSQL `pg_stat_statements` (slow-query observability)
+
+The SUPER_ADMIN **System status** API (`GET /api/v1/admin/system-status`) and dashboard `/dash/system-status` can list the top 10 queries by total time when this extension is enabled.
+
+### Managed Postgres (e.g. DigitalOcean)
+
+1. In the control panel, enable the **`pg_stat_statements`** extension for the database (or add it via SQL if your plan allows).
+2. Ensure `shared_preload_libraries` includes `pg_stat_statements` (provider docs vary; a restart may be required).
+3. As a superuser or via provider SQL console:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+```
+
+4. Optional: reset stats after deploy when comparing before/after:
+
+```sql
+SELECT pg_stat_statements_reset();
+```
+
+### Self-hosted Postgres on the VPS
+
+Add to `postgresql.conf` (then restart PostgreSQL):
+
+```
+shared_preload_libraries = 'pg_stat_statements'
+pg_stat_statements.track = all
+```
+
+Then connect to the Patet database and run `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;`.
+
+### Verify
+
+```sql
+SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements');
+```
+
+After enablement, open **System status** in the dashboard; **pg_stat_statements** should show as enabled and the slow-queries table populated after traffic.
+
+### API kill switch
+
+Set in `/var/www/patet-api/shared/.env`:
+
+```
+ADMIN_SYSTEM_STATUS_ENABLED=false
+```
+
+to return 403 on `GET /api/v1/admin/system-status` without removing the code path.
