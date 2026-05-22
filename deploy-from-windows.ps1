@@ -412,12 +412,41 @@ function Read-NumberChoice {
     }
 }
 
+function Get-DeployManualCommandLines {
+    $cmd = [System.Collections.Generic.List[string]]::new()
+    $cmd.Add('.\deploy-from-windows.ps1')
+    $cmd.Add('-Target')
+    $cmd.Add($Target)
+    if ($Migrate) { $cmd.Add('-Migrate') }
+    if ($SyncDeploymentScripts) { $cmd.Add('-SyncDeploymentScripts') }
+    if ($SkipBuild) { $cmd.Add('-SkipBuild') }
+    if ($SkipUpload) { $cmd.Add('-SkipUpload') }
+    if ($ReleaseId) {
+        $cmd.Add('-ReleaseId')
+        $cmd.Add(('"{0}"' -f $ReleaseId))
+    }
+
+    return @(
+        "cd `"$DeploymentDir`""
+        ($cmd -join ' ')
+    )
+}
+
+function Write-DeployManualCommand {
+    Write-Host ''
+    Write-Host 'Copy for next time (non-interactive):' -ForegroundColor DarkCyan
+    foreach ($line in (Get-DeployManualCommandLines)) {
+        Write-Host "  $line"
+    }
+}
+
 function Write-DeploySummary {
     param([string] $SummaryLine)
 
     Write-Host ''
     Write-Host 'Starting deploy:' -ForegroundColor Cyan
     Write-Host "  $SummaryLine"
+    Write-DeployManualCommand
 }
 
 function Invoke-DeployInteractiveQuick {
@@ -563,6 +592,9 @@ $release = Get-ReleaseTimestamp
 $sshTarget = "$($env:PATET_SSH_USER)@$($env:PATET_SSH_HOST)"
 
 Write-Step "Patet Windows deploy - target=$Target release=$release"
+if ($PSBoundParameters.Count -gt 0) {
+    Write-DeployManualCommand
+}
 
 $doBackend = $Target -eq 'backend' -or $Target -eq 'all'
 $doFrontend = $Target -eq 'frontend' -or $Target -eq 'all'

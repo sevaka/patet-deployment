@@ -85,7 +85,7 @@ cd c:\path\to\Front_and_Back\patet-deployment
 .\deploy-from-windows.ps1 -Target all
 ```
 
-**Interactive (no parameters):** run `.\deploy-from-windows.ps1` alone — first menu offers two **quick** full deploy shortcuts (all stacks, with or without migrations) or **more options** for target, sync scripts, and deploy mode.
+**Interactive (no parameters):** run `.\deploy-from-windows.ps1` alone — first menu offers two **quick** full deploy shortcuts (all stacks, with or without migrations) or **more options** for target, sync scripts, and deploy mode. After choices, the script prints an equivalent **copy for next time** command line.
 
 | Flag | When to use |
 |------|----------------|
