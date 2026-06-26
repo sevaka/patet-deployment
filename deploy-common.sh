@@ -222,7 +222,11 @@ patet_prepare_uploaded_frontend() {
 
 reload_backend_pm2() {
   if pm2 describe patet-api >/dev/null 2>&1; then
-    pm2 reload "$PM2_ECOSYSTEM" --only patet-api --update-env
+    if ! pm2 startOrReload "$PM2_ECOSYSTEM" --only patet-api --update-env; then
+      echo "PM2 startOrReload failed for patet-api — recreating from ecosystem (stale cluster state)."
+      pm2 delete patet-api 2>/dev/null || true
+      pm2 start "$PM2_ECOSYSTEM" --only patet-api --update-env
+    fi
   else
     pm2 start "$PM2_ECOSYSTEM" --only patet-api --update-env
   fi

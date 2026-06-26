@@ -6,10 +6,12 @@ Scripts on the VPS live under `/var/www/patet-deployment` (paths in `deploy-conf
 
 | Goal | Where | Command |
 |------|--------|---------|
-| Build on Windows, run on Ubuntu (recommended for heavy Next.js builds) | Windows PC | `.\deploy-from-windows.ps1 -Target all` |
+| Deploy **patet.am** (Server 1) | Windows PC | `.\deploy-patet.ps1` |
+| Deploy **commercial** (Server 2, e.g. parcel-ops.com) | Windows PC | `.\deploy-commercial.ps1` |
+| Build on Windows, run on Ubuntu (advanced) | Windows PC | `.\deploy-from-windows.ps1 -Profile patet-am -Target all` |
 | Build and deploy entirely on the server | Ubuntu VPS | `./deploy.sh all --with-migrate` |
-| Backend only from Windows | Windows PC | `.\deploy-from-windows.ps1 -Target backend` |
-| Frontend only from Windows | Windows PC | `.\deploy-from-windows.ps1 -Target frontend` |
+| Backend only from Windows | Windows PC | `.\deploy-patet.ps1 -Target backend` |
+| Frontend only from Windows | Windows PC | `.\deploy-patet.ps1 -Target frontend` |
 | Check what is running | Ubuntu VPS | `./deploy.sh status all` |
 | Roll back | Ubuntu VPS | `./rollback.sh` (interactive) or `./rollback.sh backend <release_id>` |
 
@@ -50,9 +52,11 @@ curl -fsS http://127.0.0.1:4993/ || echo "frontend not up yet"
 | 1 | Install **Node ≥ 20.12.2**, **Yarn**, **Git**. |
 | 2 | Use **OpenSSH** (`ssh`, `scp`) — built into Windows 10+. |
 | 3 | Clone repos next to each other, e.g. `Front_and_Back/patet-back-nestjs`, `patet-website`, `patet-deployment`. |
-| 4 | Copy `deploy.local.env.example` → `deploy.local.env` (gitignored). |
-| 5 | Set `PATET_SSH_HOST`, `PATET_SSH_USER`, and `PATET_SSH_EXTRA_ARGS` (see [SSH keys](#ssh-keys-windows--ubuntu)). |
+| 4 | Copy `profiles/patet-am.env.example` → `profiles/patet-am.env` and `profiles/commercial.env.example` → `profiles/commercial.env` (gitignored). |
+| 5 | Set `PATET_SSH_HOST`, `PATET_SSH_USER`, and `PATET_SSH_EXTRA_ARGS` in each profile (see [Deploy profiles](#deploy-profiles)). |
 | 6 | Test SSH: `ssh -i C:\Users\YOU\.ssh\id_rsa USER@HOST "echo ok"` |
+
+Legacy: `deploy.local.env` / `deploy.local.commercial.env` still work if `profiles/*.env` is missing.
 
 ### C. First Windows deploy (sync scripts to server)
 
@@ -78,14 +82,20 @@ Then run a full deploy (backend, frontend, or both).
 
 ## Routine deploy from Windows
 
-Default flow: **local build → upload → finalize on Linux** (`yarn install`, symlink `.env`, PM2 reload). Migrations run only with **`-Migrate`** or server **`--with-migrate`**.
+Use the wrapper for the target server:
 
 ```powershell
 cd c:\path\to\Front_and_Back\patet-deployment
-.\deploy-from-windows.ps1 -Target all
+.\deploy-patet.ps1              # patet.am (Server 1)
+.\deploy-commercial.ps1         # parcel-ops.com (Server 2)
+.\deploy-commercial.ps1 -Migrate -Target all
 ```
 
-**Interactive (no parameters):** run `.\deploy-from-windows.ps1` alone — first menu offers two **quick** full deploy shortcuts (all stacks, with or without migrations) or **more options** for target, sync scripts, and deploy mode. After choices, the script prints an equivalent **copy for next time** command line.
+Default flow: **local build → upload → finalize on Linux** (`yarn install`, symlink `.env`, PM2 reload). Migrations run only with **`-Migrate`** or server **`--with-migrate`**.
+
+**Interactive (no parameters):** run `.\deploy-patet.ps1` or `.\deploy-commercial.ps1` alone — menu offers quick full deploy or more options. The script prints an equivalent **copy for next time** command line.
+
+Advanced: `.\deploy-from-windows.ps1 -Profile patet-am|commercial` (same as wrappers).
 
 | Flag | When to use |
 |------|----------------|
@@ -233,7 +243,32 @@ Rollback (same release folders as Windows upload):
 
 ---
 
-## `deploy.local.env` reference
+## Deploy profiles
+
+One profile file per server under `profiles/` (gitignored `*.env`, committed `*.env.example`).
+
+| Profile file | Wrapper | Server |
+|--------------|---------|--------|
+| `profiles/patet-am.env` | `.\deploy-patet.ps1` | patet.am (Server 1) |
+| `profiles/commercial.env` | `.\deploy-commercial.ps1` | Commercial SaaS (Server 2) |
+
+Each profile has two sections:
+
+1. **SSH / deploy** — `PATET_SSH_HOST`, `PATET_SSH_USER`, paths (same as before).
+2. **Frontend build** — `FRONTEND_BUILD_NEXT_PUBLIC_*` vars injected into `patet-website/.env.production.local` during deploy only (not uploaded). This bakes the correct `NEXT_PUBLIC_*` values into the Next.js bundle per server.
+
+| `FRONTEND_BUILD_*` (commercial example) | Value |
+|----------------------------------------|-------|
+| `FRONTEND_BUILD_NEXT_PUBLIC_COMMERCIAL_MULTI_TENANT` | `true` |
+| `FRONTEND_BUILD_NEXT_PUBLIC_COMMERCIAL_PLATFORM_DOMAIN` | `parcel-ops.com` |
+| `FRONTEND_BUILD_NEXT_PUBLIC_API_HOST` | *(empty — same-origin `/api` via nginx)* |
+| `FRONTEND_BUILD_NEXT_PUBLIC_INTERNAL_API_BASE` | `/bff` |
+
+Backend commercial flags (`COMMERCIAL_MULTI_TENANT`, etc.) stay in **server** `/var/www/patet-api/shared/.env` only — not in the Windows profile.
+
+---
+
+## `deploy.local.env` reference (legacy)
 
 Copy from `deploy.local.env.example`:
 
@@ -259,8 +294,11 @@ Copy from `deploy.local.env.example`:
 | `deploy-common.sh` | Shared helpers (nvm PATH, activate, finalize) |
 | `deploy.sh` | Clone/build on **server**, symlink `current`, PM2 |
 | `finalize-release.sh` | Finalize **Windows-uploaded** release |
-| `deploy-from-windows.ps1` | Build on Windows, upload, SSH finalize |
-| `deploy.local.env.example` | Template for Windows SSH settings |
+| `deploy-patet.ps1` | Deploy to patet.am (`profiles/patet-am.env`) |
+| `deploy-commercial.ps1` | Deploy to commercial Server 2 (`profiles/commercial.env`) |
+| `deploy-from-windows.ps1` | Build on Windows, upload, SSH finalize (`-Profile patet-am\|commercial`) |
+| `profiles/*.env.example` | Templates for per-server SSH + frontend build vars |
+| `deploy.local.env.example` | Legacy template for Windows SSH settings |
 | `bootstrap_release_layout.sh` | One-time `releases/` + `shared/` dirs |
 | `rollback.sh` | Point `current` at older release, PM2 reload |
 | `migrate_backend.sh` | Run migrations from `current` only |
@@ -401,6 +439,29 @@ SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements');
 ```
 
 After enablement, open **System status** in the dashboard; **pg_stat_statements** should show as enabled and the slow-queries table populated after traffic.
+
+### Xosum QC transcription (optional)
+
+Set in `/var/www/patet-api/shared/.env`:
+
+```env
+XOSUM_ENABLED=true
+XOSUM_API_KEY=<Bearer key from app.xosum.am>
+XOSUM_CHECKLIST_ID=<QA checklist ID>
+XOSUM_WEBHOOK_SECRET=<same secret configured in Xosum account>
+XOSUM_WEBHOOK_PUBLIC_BASE_URL=https://api.patet.am
+```
+
+Install **ffmpeg** on the API host (`apt install ffmpeg`) if VPBX recordings are not already MP3.
+
+Configure **one** webhook in the Xosum account (`webhookURL` + `webhookSecret`):
+
+| Setting | Value |
+|---------|--------|
+| Webhook URL | `https://api.patet.am/api/v1/webhooks/xosum` |
+| Secret | same as `XOSUM_WEBHOOK_SECRET` on the server |
+
+Xosum sends both `transcript_ready` and `analysis_ready` events to that URL; Patet routes by `event_type`.
 
 ### API kill switch
 

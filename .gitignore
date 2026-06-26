@@ -2,6 +2,9 @@
 .env
 .env.*
 deploy.local.env
+deploy.local.commercial.env
+profiles/*.env
+!profiles/*.env.example
 *.pem
 *.key
 
