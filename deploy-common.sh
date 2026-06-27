@@ -106,10 +106,37 @@ verify_backend_health() {
   exit 1
 }
 
+# Optional Host header for loopback health checks (commercial Next.js rejects bare 127.0.0.1).
+# Auto-detected from WEB_ROOT/shared/.env when NEXT_PUBLIC_COMMERCIAL_MULTI_TENANT=true.
+patet_frontend_health_curl_args() {
+  local -n _out=$1
+  _out=()
+  local env_file="${WEB_ROOT}/shared/.env"
+  if [[ -f "$env_file" ]]; then
+    local commercial domain
+    commercial="$(grep -E '^NEXT_PUBLIC_COMMERCIAL_MULTI_TENANT=' "$env_file" 2>/dev/null | head -1 | cut -d= -f2- | tr -d $'\r\"' | tr '[:upper:]' '[:lower:]' | xargs)"
+    domain="$(grep -E '^NEXT_PUBLIC_COMMERCIAL_PLATFORM_DOMAIN=' "$env_file" 2>/dev/null | head -1 | cut -d= -f2- | tr -d $'\r\"' | tr '[:upper:]' '[:lower:]' | xargs)"
+    if [[ "$commercial" == "true" && -n "$domain" ]]; then
+      _out+=(-H "Host: ${domain}")
+      return 0
+    fi
+  fi
+  if [[ -n "${FRONTEND_HEALTH_HOST:-}" ]]; then
+    _out+=(-H "Host: ${FRONTEND_HEALTH_HOST}")
+  fi
+}
+
 verify_frontend_health() {
   patet_log "Verifying frontend"
-  echo "Manual check (same as this script): curl -fsS \"$FRONTEND_HEALTH_URL\""
-  if ! curl -fsS "$FRONTEND_HEALTH_URL" >/dev/null; then
+  local curl_extra=()
+  patet_frontend_health_curl_args curl_extra
+  local curl_hint="curl -fsS"
+  if ((${#curl_extra[@]} > 0)); then
+    curl_hint+=" ${curl_extra[*]}"
+  fi
+  curl_hint+=" \"$FRONTEND_HEALTH_URL\""
+  echo "Manual check (same as this script): $curl_hint"
+  if ! curl -fsS "${curl_extra[@]}" "$FRONTEND_HEALTH_URL" >/dev/null; then
     echo "Frontend verification failed."
     echo "Retry manually: curl -fsS \"$FRONTEND_HEALTH_URL\""
     echo "With response headers: curl -fsSI \"$FRONTEND_HEALTH_URL\""
