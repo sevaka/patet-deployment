@@ -304,7 +304,83 @@ function Get-SshOptionArgs {
     return @($extra -split '\s+')
 }
 
+function Get-SshIdentityPath {
+    $opts = Get-SshOptionArgs
+    for ($i = 0; $i -lt ($opts.Count - 1); $i++) {
+        if ($opts[$i] -eq '-i') {
+            return $opts[$i + 1]
+        }
+    }
+    return $null
+}
+
+function Test-UsesPuttyIdentity {
+    $identity = Get-SshIdentityPath
+    return ($identity -and $identity -match '\.ppk$' -and (Test-Path -LiteralPath $identity))
+}
+
+function Get-PuttyCommonArgs {
+    $puttyArgs = @('-batch')
+    $identity = Get-SshIdentityPath
+    if ($identity) {
+        $puttyArgs += '-i', $identity
+    }
+    if ($env:PATET_SSH_HOSTKEY) {
+        $puttyArgs += '-hostkey', $env:PATET_SSH_HOSTKEY
+    }
+    return $puttyArgs
+}
+
+function Invoke-DeploySsh {
+    param(
+        [string] $SshTarget,
+        [string] $RemoteCommand
+    )
+    if (Test-UsesPuttyIdentity) {
+        Assert-Command plink
+        $plinkArgs = @(Get-PuttyCommonArgs) + @($SshTarget, $RemoteCommand)
+        Write-Host "plink $($plinkArgs -join ' ')"
+        & plink @plinkArgs
+        if ($LASTEXITCODE -ne 0) { throw "plink failed with exit code $LASTEXITCODE" }
+        return
+    }
+    $sshArgs = @(Get-SshOptionArgs) + @($SshTarget, $RemoteCommand)
+    Write-Host "ssh $($sshArgs -join ' ')"
+    & ssh @sshArgs
+    if ($LASTEXITCODE -ne 0) { throw "ssh failed with exit code $LASTEXITCODE" }
+}
+
+function Invoke-DeployScp {
+    param(
+        [string] $LocalPath,
+        [string] $RemoteSpec
+    )
+    if (Test-UsesPuttyIdentity) {
+        Assert-Command pscp
+        $pscpArgs = @(Get-PuttyCommonArgs) + @($LocalPath, $RemoteSpec)
+        Write-Host "pscp $($pscpArgs -join ' ')"
+        & pscp @pscpArgs
+        if ($LASTEXITCODE -ne 0) { throw "pscp failed with exit code $LASTEXITCODE" }
+        return
+    }
+    $scpArgs = @(Get-SshOptionArgs) + @($LocalPath, $RemoteSpec)
+    Write-Host "scp $($scpArgs -join ' ')"
+    & scp @scpArgs
+    if ($LASTEXITCODE -ne 0) { throw "scp failed with exit code $LASTEXITCODE" }
+}
+
+function Assert-DeployTransportCommands {
+    if (Test-UsesPuttyIdentity) {
+        Assert-Command plink
+        Assert-Command pscp
+        return
+    }
+    Assert-Command ssh
+    Assert-Command scp
+}
+
 function Get-RsyncRshArg {
+    if (Test-UsesPuttyIdentity) { return @() }
     $sshOpts = Get-SshOptionArgs
     if ($sshOpts.Count -eq 0) { return @() }
     return @('-e', ('ssh ' + ($sshOpts -join ' ')))
@@ -324,6 +400,7 @@ function Invoke-WslQuiet {
 }
 
 function Get-RsyncMode {
+    if (Test-UsesPuttyIdentity) { return $null }
     if (Get-Command rsync -ErrorAction SilentlyContinue) { return 'native' }
     if (Get-Command wsl -ErrorAction SilentlyContinue) {
         if ((Invoke-WslQuiet -WslArgs @('-e', 'sh', '-c', 'command -v rsync >/dev/null 2>&1')) -eq 0) {
@@ -409,8 +486,7 @@ function Invoke-ScpTarRelease {
     )
     Write-Step "Uploading via tar+scp (rsync not available)"
     Assert-Command tar
-    Assert-Command scp
-    Assert-Command ssh
+    Assert-DeployTransportCommands
 
     $archive = Join-Path $env:TEMP ("patet-release-{0}.tgz" -f [Guid]::NewGuid().ToString('N'))
     try {
@@ -429,22 +505,18 @@ function Invoke-ScpTarRelease {
         $sizeMb = [math]::Round((Get-Item -LiteralPath $archive).Length / 1MB, 1)
         Write-SubStep ("Archive ready: {0} MB in {1:mm\:ss}" -f $sizeMb, $sw.Elapsed)
 
-        $sshOpts = Get-SshOptionArgs
         $remoteParent = ($RemotePath -replace '/[^/]+$','')
         Write-SubStep 'Ensuring remote release directory exists...'
-        & ssh @sshOpts $SshTarget "mkdir -p '$remoteParent' '$RemotePath'"
-        if ($LASTEXITCODE -ne 0) { throw "ssh mkdir failed" }
+        Invoke-DeploySsh -SshTarget $SshTarget -RemoteCommand "mkdir -p '$remoteParent' '$RemotePath'"
 
         Write-SubStep ("Uploading {0} MB to server (scp)..." -f $sizeMb)
         $sw.Restart()
-        & scp @sshOpts $archive "${SshTarget}:/tmp/patet-release.tgz"
-        if ($LASTEXITCODE -ne 0) { throw "scp failed" }
+        Invoke-DeployScp -LocalPath $archive -RemoteSpec "${SshTarget}:/tmp/patet-release.tgz"
         Write-SubStep ("Upload finished in {0:mm\:ss}" -f $sw.Elapsed)
 
         Write-SubStep 'Extracting on server...'
         $sw.Restart()
-        & ssh @sshOpts $SshTarget "rm -rf '$RemotePath' && mkdir -p '$RemotePath' && tar -xzf /tmp/patet-release.tgz -C '$RemotePath' && rm -f /tmp/patet-release.tgz"
-        if ($LASTEXITCODE -ne 0) { throw "remote extract failed" }
+        Invoke-DeploySsh -SshTarget $SshTarget -RemoteCommand "rm -rf '$RemotePath' && mkdir -p '$RemotePath' && tar -xzf /tmp/patet-release.tgz -C '$RemotePath' && rm -f /tmp/patet-release.tgz"
         Write-SubStep ("Extract finished in {0:mm\:ss}" -f $sw.Elapsed)
     }
     finally {
@@ -469,15 +541,8 @@ function Invoke-UploadRelease {
 
 function Invoke-Ssh {
     param([string] $RemoteCommand)
-    $extra = $env:PATET_SSH_EXTRA_ARGS
-    $sshArgs = @()
-    if ($extra) {
-        $sshArgs += ($extra -split '\s+')
-    }
-    $sshArgs += "${env:PATET_SSH_USER}@${env:PATET_SSH_HOST}", $RemoteCommand
-    Write-Host "ssh $($sshArgs -join ' ')"
-    & ssh @sshArgs
-    if ($LASTEXITCODE -ne 0) { throw "ssh failed with exit code $LASTEXITCODE" }
+    $sshTarget = "${env:PATET_SSH_USER}@${env:PATET_SSH_HOST}"
+    Invoke-DeploySsh -SshTarget $sshTarget -RemoteCommand $RemoteCommand
 }
 
 function Read-NumberChoice {
@@ -664,8 +729,7 @@ function Sync-DeploymentScriptsToServer {
         $local = Join-Path $DeploymentDir $f
         if (-not (Test-Path $local)) { continue }
         Write-Host "Uploading deployment script $f"
-        & scp @(Get-SshOptionArgs) $local "${SshTarget}:${dest}/$f"
-        if ($LASTEXITCODE -ne 0) { throw "scp $f failed" }
+        Invoke-DeployScp -LocalPath $local -RemoteSpec "${SshTarget}:${dest}/$f"
     }
     Invoke-Ssh "sed -i 's/\r$//' '$dest'/*.sh 2>/dev/null || true; chmod +x '$dest/finalize-release.sh' '$dest/deploy.sh' '$dest/rollback.sh' 2>/dev/null || true"
 }
@@ -726,8 +790,7 @@ if ($SkipUpload) {
     exit 0
 }
 
-Assert-Command ssh
-Assert-Command scp
+Assert-DeployTransportCommands
 
 if ($SyncDeploymentScripts) {
     Sync-DeploymentScriptsToServer -SshTarget $sshTarget
