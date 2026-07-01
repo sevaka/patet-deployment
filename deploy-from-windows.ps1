@@ -304,6 +304,36 @@ function Get-SshOptionArgs {
     return @($extra -split '\s+')
 }
 
+# OpenSSH on Windows can block in PowerShell until Enter is pressed (stdin still attached).
+# -n redirects stdin from /dev/null for non-interactive deploy steps.
+function Get-DeployTransportSshArgs {
+    $opts = @(Get-SshOptionArgs)
+    if ($opts -notcontains '-n') {
+        return @('-n') + $opts
+    }
+    return $opts
+}
+
+function Invoke-ExternalWithClosedStdin {
+    param(
+        [Parameter(Mandatory)]
+        [string] $FilePath,
+        [Parameter(Mandatory)]
+        [string[]] $ArgumentList
+    )
+    $nullInput = [IO.Path]::GetTempFileName()
+    try {
+        $p = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -Wait -PassThru -NoNewWindow `
+            -RedirectStandardInput $nullInput
+        if ($p.ExitCode -ne 0) {
+            throw "$FilePath failed with exit code $($p.ExitCode)"
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $nullInput -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-SshIdentityPath {
     $opts = Get-SshOptionArgs
     for ($i = 0; $i -lt ($opts.Count - 1); $i++) {
@@ -344,7 +374,7 @@ function Invoke-DeploySsh {
         if ($LASTEXITCODE -ne 0) { throw "plink failed with exit code $LASTEXITCODE" }
         return
     }
-    $sshArgs = @(Get-SshOptionArgs) + @($SshTarget, $RemoteCommand)
+    $sshArgs = @(Get-DeployTransportSshArgs) + @($SshTarget, $RemoteCommand)
     Write-Host "ssh $($sshArgs -join ' ')"
     & ssh @sshArgs
     if ($LASTEXITCODE -ne 0) { throw "ssh failed with exit code $LASTEXITCODE" }
@@ -365,8 +395,7 @@ function Invoke-DeployScp {
     }
     $scpArgs = @(Get-SshOptionArgs) + @($LocalPath, $RemoteSpec)
     Write-Host "scp $($scpArgs -join ' ')"
-    & scp @scpArgs
-    if ($LASTEXITCODE -ne 0) { throw "scp failed with exit code $LASTEXITCODE" }
+    Invoke-ExternalWithClosedStdin -FilePath 'scp' -ArgumentList $scpArgs
 }
 
 function Assert-DeployTransportCommands {
@@ -381,8 +410,8 @@ function Assert-DeployTransportCommands {
 
 function Get-RsyncRshArg {
     if (Test-UsesPuttyIdentity) { return @() }
-    $sshOpts = Get-SshOptionArgs
-    if ($sshOpts.Count -eq 0) { return @() }
+    $sshOpts = Get-DeployTransportSshArgs
+    if ($sshOpts.Count -eq 0) { return @('-e', 'ssh -n') }
     return @('-e', ('ssh ' + ($sshOpts -join ' ')))
 }
 
