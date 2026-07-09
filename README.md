@@ -8,12 +8,15 @@ Scripts on the VPS live under `/var/www/patet-deployment` (paths in `deploy-conf
 |------|--------|---------|
 | Deploy **patet.am** (Server 1) | Windows PC | `.\deploy-patet.ps1` |
 | Deploy **commercial** (Server 2, e.g. parcel-ops.com) | Windows PC | `.\deploy-commercial.ps1` |
+| **Pre-deploy API smoke** (from `patet-qa-tests` on your PC) | Windows PC | `cd ..\patet-qa-tests` then `npm run test:before-deploy` |
 | Build on Windows, run on Ubuntu (advanced) | Windows PC | `.\deploy-from-windows.ps1 -Profile patet-am -Target all` |
 | Build and deploy entirely on the server | Ubuntu VPS | `./deploy.sh all --with-migrate` |
 | Backend only from Windows | Windows PC | `.\deploy-patet.ps1 -Target backend` |
 | Frontend only from Windows | Windows PC | `.\deploy-patet.ps1 -Target frontend` |
 | Check what is running | Ubuntu VPS | `./deploy.sh status all` |
 | Roll back | Ubuntu VPS | `./rollback.sh` (interactive) or `./rollback.sh backend <release_id>` |
+
+**CI / pre-deploy gate:** Nest lives on **Bitbucket** — enable Pipelines and `bitbucket-pipelines.yml` (build then `test:before-deploy`). If that step fails, do **not** deploy. Until staging DNS exists, use `https://patet.am/api/v1` and tenant `https://xx2.parcel-ops.com/api/v1`. Always run `npm run test:before-deploy` from `patet-qa-tests` on your PC before `.\deploy-patet.ps1`.
 
 **Rule:** never upload `node_modules` from Windows. Native modules (e.g. bcrypt) must be installed on Linux via `yarn install` during finalize.
 
