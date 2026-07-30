@@ -468,14 +468,15 @@ XOSUM_WEBHOOK_PUBLIC_BASE_URL=https://api.patet.am
 
 Install **ffmpeg** on the API host (`apt install ffmpeg`) if VPBX recordings are not already MP3.
 
-Configure **one** webhook in the Xosum account (`webhookURL` + `webhookSecret`):
+Configure **both** Xosum webhook URLs in the account (transcription + analysis) to the same Patet endpoint (`webhookSecret` must match `XOSUM_WEBHOOK_SECRET`):
 
 | Setting | Value |
 |---------|--------|
-| Webhook URL | `https://api.patet.am/api/v1/webhooks/xosum` |
+| Transcription webhook URL | `https://api.patet.am/api/v1/webhooks/xosum` |
+| Analysis webhook URL | `https://api.patet.am/api/v1/webhooks/xosum` (same) |
 | Secret | same as `XOSUM_WEBHOOK_SECRET` on the server |
 
-Xosum sends both `transcript_ready` and `analysis_ready` events to that URL; Patet routes by `event_type`.
+Xosum POSTs `transcript_ready` and `analysis_ready` with `event_type`; Patet routes by that field. **Analysis completion is webhook-only** (no public get-analysis poll). For commercial (`parcel-ops.com`), use that server’s public API base in place of `api.patet.am`.
 
 ### API kill switch
 
