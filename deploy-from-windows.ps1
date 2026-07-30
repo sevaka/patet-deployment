@@ -26,7 +26,8 @@
   Rsync patet-deployment scripts to PATET_DEPLOYMENT_ROOT on the server before finalize.
 
 .NOTES
-  Run with no parameters to open an interactive menu (target, migrations, sync scripts, deploy mode).
+  Run with no parameters to open an interactive menu:
+  1 backend only, 2 frontend only, 3 back+front, 4 back+front+migrate, 5 more options.
 #>
 [CmdletBinding()]
 param(
@@ -644,16 +645,34 @@ function Write-DeploySummary {
 }
 
 function Invoke-DeployInteractiveQuick {
-    param([bool] $WithMigrate)
+    param(
+        [ValidateSet('backend', 'frontend', 'all')]
+        [string] $DeployTarget = 'all',
 
-    $script:Target = 'all'
+        [bool] $WithMigrate = $false
+    )
+
+    $script:Target = $DeployTarget
     $script:Migrate = $WithMigrate
     $script:SyncDeploymentScripts = $false
     $script:SkipBuild = $false
     $script:SkipUpload = $false
 
-    $migrateLabel = if ($WithMigrate) { 'yes' } else { 'no' }
-    Write-DeploySummary -SummaryLine "Quick: both stacks, full build + upload + finalize, migrations=$migrateLabel, no script sync"
+    $targetLabel = switch ($DeployTarget) {
+        'backend' { 'backend only' }
+        'frontend' { 'frontend only' }
+        default { 'backend + frontend' }
+    }
+    $migrateLabel = if ($DeployTarget -eq 'frontend') {
+        'n/a'
+    }
+    elseif ($WithMigrate) {
+        'yes'
+    }
+    else {
+        'no'
+    }
+    Write-DeploySummary -SummaryLine "Quick: $targetLabel, full build + upload + finalize, migrations=$migrateLabel, no script sync"
 }
 
 function Invoke-DeployInteractiveDetailed {
@@ -732,14 +751,18 @@ function Invoke-DeployInteractivePrompts {
     Write-Host "Patet Windows deploy$profileHint" -ForegroundColor Cyan
 
     $entryPick = Read-NumberChoice -Title 'What do you want to do?' -Options @(
-        'Quick: build + deploy all (backend + frontend, no migrations)',
-        'Quick: build + deploy all (backend + frontend, with migrations)',
-        'More options (target, migrations, sync scripts, deploy mode)'
-    ) -DefaultIndex 1
+        'Backend only',
+        'Frontend only',
+        'Backend + frontend',
+        'Backend + frontend + migrations',
+        'More options (sync scripts, deploy mode, release id, etc.)'
+    ) -DefaultIndex 3
 
     switch ($entryPick) {
-        1 { Invoke-DeployInteractiveQuick -WithMigrate:$false }
-        2 { Invoke-DeployInteractiveQuick -WithMigrate:$true }
+        1 { Invoke-DeployInteractiveQuick -DeployTarget backend -WithMigrate:$false }
+        2 { Invoke-DeployInteractiveQuick -DeployTarget frontend -WithMigrate:$false }
+        3 { Invoke-DeployInteractiveQuick -DeployTarget all -WithMigrate:$false }
+        4 { Invoke-DeployInteractiveQuick -DeployTarget all -WithMigrate:$true }
         default { Invoke-DeployInteractiveDetailed }
     }
 }

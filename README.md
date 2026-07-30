@@ -96,7 +96,17 @@ cd c:\path\to\Front_and_Back\patet-deployment
 
 Default flow: **local build → upload → finalize on Linux** (`yarn install`, symlink `.env`, PM2 reload). Migrations run only with **`-Migrate`** or server **`--with-migrate`**.
 
-**Interactive (no parameters):** run `.\deploy-patet.ps1` or `.\deploy-commercial.ps1` alone — menu offers quick full deploy or more options. The script prints an equivalent **copy for next time** command line.
+**Interactive (no parameters):** run `.\deploy-patet.ps1` or `.\deploy-commercial.ps1` alone — menu:
+
+| # | Choice |
+|---|--------|
+| 1 | Backend only |
+| 2 | Frontend only |
+| 3 | Backend + frontend (default) |
+| 4 | Backend + frontend + migrations |
+| 5 | More options (sync scripts, deploy mode, release id, etc.) |
+
+The script prints an equivalent **copy for next time** command line.
 
 Advanced: `.\deploy-from-windows.ps1 -Profile patet-am|commercial` (same as wrappers).
 
