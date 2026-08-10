@@ -39,15 +39,18 @@ Run as a user with write access to `/var/www` (often `root`).
 | 7 | `pm2 save` and enable PM2 on boot if not already (`pm2 startup`). |
 | 8 | Install **LibreOffice** for settlement invoice PDF export (both Server 1 and Server 2). |
 
-**LibreOffice (settlement invoice PDF)** — required on **patet.am** and **parcel-ops.com** API hosts:
+**LibreOffice (settlement invoice PDF)** — required on **patet.am** and **parcel-ops.com** API hosts (API host, not only website):
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y libreoffice-calc libreoffice-writer-common
-soffice --version
+# xlsx→pdf needs Calc. Do not use libreoffice-writer-common (not on all Ubuntu repos).
+sudo apt-get install -y libreoffice-calc
+# If calc is missing or PDF still fails:
+# sudo apt-get install -y libreoffice
+soffice --version || libreoffice --version
 ```
 
-Optional: set `LIBREOFFICE_PATH` in the API `.env` if `soffice` is not on PATH. Excel invoice export works without LibreOffice; PDF conversion fails clearly when it is missing.
+Optional: set `LIBREOFFICE_PATH` in the API `.env` if `soffice` / `libreoffice` is not on PATH. Excel invoice export works without LibreOffice; PDF conversion fails clearly when it is missing.
 
 Verify on the server (interactive SSH, after nvm loads):
 
