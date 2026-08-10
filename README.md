@@ -37,6 +37,17 @@ Run as a user with write access to `/var/www` (often `root`).
 | 5 | Place shared env files: `/var/www/patet-api/shared/.env` and `/var/www/patet-website/shared/.env` (and `ca-certificate.crt` for the API if used). |
 | 6 | Start PM2 apps once from the ecosystem file (see [PM2 cluster](#backend-pm2-cluster-mode-patet-api) below). |
 | 7 | `pm2 save` and enable PM2 on boot if not already (`pm2 startup`). |
+| 8 | Install **LibreOffice** for settlement invoice PDF export (both Server 1 and Server 2). |
+
+**LibreOffice (settlement invoice PDF)** — required on **patet.am** and **parcel-ops.com** API hosts:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y libreoffice-calc libreoffice-writer-common
+soffice --version
+```
+
+Optional: set `LIBREOFFICE_PATH` in the API `.env` if `soffice` is not on PATH. Excel invoice export works without LibreOffice; PDF conversion fails clearly when it is missing.
 
 Verify on the server (interactive SSH, after nvm loads):
 
