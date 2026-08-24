@@ -7,7 +7,7 @@ WEB_ROOT="/var/www/patet-website"
 echo "Creating release layout..."
 
 mkdir -p "$API_ROOT/releases" "$API_ROOT/shared"
-mkdir -p "$WEB_ROOT/releases" "$WEB_ROOT/shared"
+mkdir -p "$WEB_ROOT/releases" "$WEB_ROOT/shared" "$WEB_ROOT/shared/assets-videos"
 mkdir -p "/var/www/patet-deployment"
 
 if [ -f "$API_ROOT/.env" ] && [ ! -f "$API_ROOT/shared/.env" ]; then

@@ -118,15 +118,36 @@ Advanced: `.\deploy-from-windows.ps1 -Profile patet-am|commercial` (same as wrap
 | `-SkipUpload` | Build only; no upload or finalize |
 | `-ReleaseId 2026-05-20_120000` | Reuse or fix a specific release folder |
 | `-SyncDeploymentScripts` | Push updated `finalize-release.sh`, `deploy-common.sh`, etc. to the server |
+| `-ForceSyncVideos` | Re-copy every local `public/assets/videos` MP4/MOV even if the server hash already matches |
 
 What the script does:
 
 1. `yarn install` + `yarn build` locally (backend → `dist/src/main.js`, frontend → `.next/BUILD_ID`).
 2. Writes `.patet-upload-sha` from local `git HEAD`.
-3. Uploads to `/var/www/patet-api/releases/<id>` and/or `/var/www/patet-website/releases/<id>`.
-4. SSH runs `./finalize-release.sh <target> <id>` on the server.
+3. Uploads to `/var/www/patet-api/releases/<id>` and/or `/var/www/patet-website/releases/<id>`. **Frontend `*.mp4` / `*.mov` are excluded** from this upload.
+4. Copies new or changed demo videos once into `/var/www/patet-website/shared/assets-videos/` (SHA-256 skip if unchanged). Unchanged files are not uploaded again.
+5. SSH runs `./finalize-release.sh <target> <id>` on the server, then points `current/public/assets/videos` at that shared folder.
 
 **Typical cadence:** use `-SyncDeploymentScripts` when deployment scripts changed; otherwise routine deploy is just `-Target all`.
+
+### Demo videos (shared store)
+
+Demo MP4s in `patet-website/public/assets/videos/` are ~62 MB and would otherwise go out with every frontend release. They now live once per VPS:
+
+| Path | Role |
+|------|------|
+| Windows `patet-website/public/assets/videos/*.mp4` | Local/dev copies (still in git) |
+| `/var/www/patet-website/shared/assets-videos/` | Persistent store on that server (patet.am and parcel-ops.com each have their own) |
+| `/var/www/patet-website/current/public/assets/videos` | Symlink to the shared store so Next.js still serves `/assets/videos/...` |
+
+First frontend deploy after this change uploads the videos once (~62 MB). Later deploys skip them unless a file changes (or you pass `-ForceSyncVideos`).
+
+Do this on **each** production server the first time (they do not share disk):
+
+```powershell
+.\deploy-patet.ps1 -Target frontend -SyncDeploymentScripts
+.\deploy-commercial.ps1 -Target frontend -SyncDeploymentScripts
+```
 
 ### Resume after a failed upload
 

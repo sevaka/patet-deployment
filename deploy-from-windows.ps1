@@ -25,6 +25,9 @@
 .PARAMETER SyncDeploymentScripts
   Rsync patet-deployment scripts to PATET_DEPLOYMENT_ROOT on the server before finalize.
 
+.PARAMETER ForceSyncVideos
+  Re-upload all local public/assets/videos/*.mp4 to the server shared store even if hashes match.
+
 .NOTES
   Run with no parameters to open an interactive menu:
   1 backend only, 2 frontend only, 3 back+front, 4 back+front+migrate, 5 more options.
@@ -39,6 +42,7 @@ param(
     [switch] $Migrate,
     [switch] $SkipUpload,
     [switch] $SyncDeploymentScripts,
+    [switch] $ForceSyncVideos,
 
     [string] $ReleaseId = '',
 
@@ -284,6 +288,7 @@ function Write-SubStep([string] $Message) {
 }
 
 # Shared upload excludes. .next/cache is dev-only (~hundreds of MB); .next/trace is often locked on Windows.
+# Demo MP4s are copied once to WEB_ROOT/shared/assets-videos (see Sync-FrontendSharedVideos).
 function Get-PatetUploadExcludeNames {
     return @(
         'node_modules',
@@ -296,6 +301,15 @@ function Get-PatetUploadExcludeNames {
         '.cursor',
         '.turbo',
         '.vscode'
+    )
+}
+
+function Get-PatetUploadExcludePatterns {
+    return @(
+        '*.mp4',
+        '*.MP4',
+        '*.mov',
+        '*.MOV'
     )
 }
 
@@ -365,18 +379,31 @@ function Get-PuttyCommonArgs {
 function Invoke-DeploySsh {
     param(
         [string] $SshTarget,
-        [string] $RemoteCommand
+        [string] $RemoteCommand,
+        [switch] $CaptureOutput
     )
+    # Here-strings on Windows are CRLF; bash treats `exit 0\r` as a non-numeric argument.
+    $RemoteCommand = [string]$RemoteCommand -replace "`r", ''
     if (Test-UsesPuttyIdentity) {
         Assert-Command plink
         $plinkArgs = @(Get-PuttyCommonArgs) + @($SshTarget, $RemoteCommand)
         Write-Host "plink $($plinkArgs -join ' ')"
+        if ($CaptureOutput) {
+            $output = & plink @plinkArgs
+            if ($LASTEXITCODE -ne 0) { throw "plink failed with exit code $LASTEXITCODE" }
+            return @($output | ForEach-Object { "$_" })
+        }
         & plink @plinkArgs
         if ($LASTEXITCODE -ne 0) { throw "plink failed with exit code $LASTEXITCODE" }
         return
     }
     $sshArgs = @(Get-DeployTransportSshArgs) + @($SshTarget, $RemoteCommand)
     Write-Host "ssh $($sshArgs -join ' ')"
+    if ($CaptureOutput) {
+        $output = & ssh @sshArgs
+        if ($LASTEXITCODE -ne 0) { throw "ssh failed with exit code $LASTEXITCODE" }
+        return @($output | ForEach-Object { "$_" })
+    }
     & ssh @sshArgs
     if ($LASTEXITCODE -ne 0) { throw "ssh failed with exit code $LASTEXITCODE" }
 }
@@ -468,6 +495,9 @@ function Invoke-RsyncRelease {
         $excludes += '--exclude', "$name/"
         $excludes += '--exclude', $name
     }
+    foreach ($pat in Get-PatetUploadExcludePatterns) {
+        $excludes += '--exclude', $pat
+    }
     $excludes += '--exclude', '*.log'
     $mode = Get-RsyncMode
     if (-not $mode) {
@@ -524,9 +554,12 @@ function Invoke-ScpTarRelease {
         foreach ($name in Get-PatetUploadExcludeNames) {
             $tarArgs += "--exclude=$name"
         }
+        foreach ($pat in Get-PatetUploadExcludePatterns) {
+            $tarArgs += "--exclude=$pat"
+        }
         $tarArgs += '-C', $LocalPath, '.'
 
-        Write-SubStep 'Creating compressed archive (excludes node_modules, .git, .next/cache, .next/trace)...'
+        Write-SubStep 'Creating compressed archive (excludes node_modules, .git, .next/cache, .next/trace, *.mp4)...'
         $sw = [Diagnostics.Stopwatch]::StartNew()
         & tar @tarArgs 2>&1 | ForEach-Object { Write-SubStep $_ }
         if ($LASTEXITCODE -ne 0) {
@@ -567,6 +600,124 @@ function Invoke-UploadRelease {
     if (-not $usedRsync) {
         Invoke-ScpTarRelease -LocalPath $LocalPath -RemotePath $RemotePath -SshTarget $SshTarget
     }
+}
+
+function Get-FrontendSharedVideosRemoteDir {
+    param([string] $WebRoot)
+    return "$WebRoot/shared/assets-videos"
+}
+
+function Get-LocalFrontendVideoFiles {
+    param([string] $RepoPath)
+    $dir = Join-Path $RepoPath 'public\assets\videos'
+    if (-not (Test-Path -LiteralPath $dir)) {
+        return @()
+    }
+    return @(Get-ChildItem -LiteralPath $dir -File | Where-Object {
+        $_.Extension -match '^\.(mp4|mov)$'
+    })
+}
+
+function Get-RemoteFrontendVideoHashMap {
+    param(
+        [string] $SshTarget,
+        [string] $RemoteDir
+    )
+    $remoteCmd = (
+        'mkdir -p ''{0}''; cd ''{0}''; shopt -s nullglob; ' +
+        'for f in *.mp4 *.MP4 *.mov *.MOV; do [ -f "$f" ] || continue; ' +
+        'h=$(sha256sum -- "$f" | cut -d" " -f1); printf "%s\t%s\n" "$f" "$h"; done'
+    ) -f $RemoteDir
+    $lines = Invoke-DeploySsh -SshTarget $SshTarget -RemoteCommand $remoteCmd -CaptureOutput
+    $map = @{}
+    foreach ($line in @($lines)) {
+        $text = "$line".Trim()
+        if ([string]::IsNullOrWhiteSpace($text)) { continue }
+        $parts = $text -split "`t", 2
+        if ($parts.Count -ne 2) { continue }
+        $name = $parts[0].Trim()
+        $hash = $parts[1].Trim().ToLowerInvariant()
+        if ($name -and $hash) {
+            $map[$name] = $hash
+        }
+    }
+    return $map
+}
+
+function Sync-FrontendSharedVideos {
+    param(
+        [string] $RepoPath,
+        [string] $WebRoot,
+        [string] $SshTarget,
+        [switch] $Force
+    )
+    $localFiles = Get-LocalFrontendVideoFiles -RepoPath $RepoPath
+    $remoteDir = Get-FrontendSharedVideosRemoteDir -WebRoot $WebRoot
+    Write-Step "Sync demo videos -> $remoteDir"
+    if ($localFiles.Count -eq 0) {
+        Write-Warning "No local MP4/MOV files under public\assets\videos. Skipping video sync (server shared store is left as-is)."
+        return
+    }
+
+    $remoteHashes = Get-RemoteFrontendVideoHashMap -SshTarget $SshTarget -RemoteDir $remoteDir
+    $toUpload = New-Object System.Collections.Generic.List[System.IO.FileInfo]
+    foreach ($file in $localFiles) {
+        $localHash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        $remoteHash = $remoteHashes[$file.Name]
+        if (-not $Force -and $remoteHash -and $remoteHash -eq $localHash) {
+            Write-SubStep ("Skip unchanged {0}" -f $file.Name)
+            continue
+        }
+        $toUpload.Add($file)
+    }
+
+    if ($toUpload.Count -eq 0) {
+        Write-SubStep ("All {0} demo videos already on server (hash match)." -f $localFiles.Count)
+        return
+    }
+
+    $bytes = ($toUpload | Measure-Object -Property Length -Sum).Sum
+    $sizeMb = [math]::Round($bytes / 1MB, 1)
+    Write-SubStep ("Uploading {0} video(s), {1} MB (new or changed)..." -f $toUpload.Count, $sizeMb)
+
+    Assert-Command tar
+    $staging = Join-Path $env:TEMP ("patet-videos-{0}" -f [Guid]::NewGuid().ToString('N'))
+    $archive = Join-Path $env:TEMP ("patet-shared-videos-{0}.tgz" -f [Guid]::NewGuid().ToString('N'))
+    try {
+        New-Item -ItemType Directory -Path $staging | Out-Null
+        foreach ($file in $toUpload) {
+            Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $staging $file.Name)
+        }
+        $tarArgs = @('-czf', $archive, '-C', $staging, '.')
+        & tar @tarArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "tar create failed for shared videos (exit $LASTEXITCODE)"
+        }
+        Invoke-DeployScp -LocalPath $archive -RemoteSpec "${SshTarget}:/tmp/patet-shared-videos.tgz"
+        Invoke-DeploySsh -SshTarget $SshTarget -RemoteCommand "mkdir -p '$remoteDir' && tar -xzf /tmp/patet-shared-videos.tgz -C '$remoteDir' && rm -f /tmp/patet-shared-videos.tgz"
+        Write-SubStep 'Shared demo videos updated.'
+    }
+    finally {
+        if (Test-Path -LiteralPath $staging) {
+            Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path -LiteralPath $archive) {
+            Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Ensure-FrontendCurrentVideosLink {
+    param(
+        [string] $WebRoot,
+        [string] $SshTarget
+    )
+    $remoteDir = Get-FrontendSharedVideosRemoteDir -WebRoot $WebRoot
+    $linkPath = "$WebRoot/current/public/assets/videos"
+    $parentPath = "$WebRoot/current/public/assets"
+    Write-Step "Link $linkPath -> $remoteDir"
+    $remoteCmd = "mkdir -p '$parentPath' '$remoteDir'; rm -rf '$linkPath'; ln -sfn '$remoteDir' '$linkPath'; readlink '$linkPath'"
+    Invoke-DeploySsh -SshTarget $SshTarget -RemoteCommand $remoteCmd
 }
 
 function Invoke-Ssh {
@@ -614,6 +765,7 @@ function Get-DeployManualCommandLines {
     }
     if ($Migrate) { $cmd.Add('-Migrate') }
     if ($SyncDeploymentScripts) { $cmd.Add('-SyncDeploymentScripts') }
+    if ($ForceSyncVideos) { $cmd.Add('-ForceSyncVideos') }
     if ($SkipBuild) { $cmd.Add('-SkipBuild') }
     if ($SkipUpload) { $cmd.Add('-SkipUpload') }
     if ($ReleaseId) {
@@ -655,6 +807,7 @@ function Invoke-DeployInteractiveQuick {
     $script:Target = $DeployTarget
     $script:Migrate = $WithMigrate
     $script:SyncDeploymentScripts = $false
+    $script:ForceSyncVideos = $false
     $script:SkipBuild = $false
     $script:SkipUpload = $false
 
@@ -705,6 +858,18 @@ function Invoke-DeployInteractiveDetailed {
     ) -DefaultIndex 1
     $script:SyncDeploymentScripts = ($syncPick -eq 2)
 
+    $includesFrontend = $script:Target -eq 'frontend' -or $script:Target -eq 'all'
+    if ($includesFrontend) {
+        $videoPick = Read-NumberChoice -Title 'Re-upload all demo MP4s to the shared store (even if unchanged)?' -Options @(
+            'No - skip files whose SHA-256 already matches the server',
+            'Yes - copy every local public/assets/videos file again'
+        ) -DefaultIndex 1
+        $script:ForceSyncVideos = ($videoPick -eq 2)
+    }
+    else {
+        $script:ForceSyncVideos = $false
+    }
+
     $modePick = Read-NumberChoice -Title 'Deploy mode?' -Options @(
         'Full - build locally, upload, finalize on server',
         'Build only - no upload or finalize',
@@ -740,7 +905,8 @@ function Invoke-DeployInteractiveDetailed {
 
     $migrateSummary = if ($includesBackend) { if ($Migrate) { 'yes' } else { 'no' } } else { 'n/a' }
     $modeSummary = if ($SkipUpload) { 'build only' } elseif ($SkipBuild) { 'upload + finalize' } else { 'full' }
-    $summary = "Target=$Target, migrations=$migrateSummary, sync scripts=$(if ($SyncDeploymentScripts) { 'yes' } else { 'no' }), mode=$modeSummary"
+    $videoSummary = if ($includesFrontend) { if ($ForceSyncVideos) { 'force' } else { 'hash-skip' } } else { 'n/a' }
+    $summary = "Target=$Target, migrations=$migrateSummary, sync scripts=$(if ($SyncDeploymentScripts) { 'yes' } else { 'no' }), videos=$videoSummary, mode=$modeSummary"
     if ($ReleaseId) { $summary += ", release id=$ReleaseId" }
     Write-DeploySummary -SummaryLine $summary
 }
@@ -795,7 +961,7 @@ if (-not $env:PATET_SSH_HOST -or -not $env:PATET_SSH_USER) {
     throw "PATET_SSH_HOST and PATET_SSH_USER must be set in deploy profile (profiles\$resolvedProfile.env)"
 }
 
-$explicitDeployOpts = @('Target', 'SkipBuild', 'Migrate', 'SkipUpload', 'SyncDeploymentScripts', 'ReleaseId')
+$explicitDeployOpts = @('Target', 'SkipBuild', 'Migrate', 'SkipUpload', 'SyncDeploymentScripts', 'ForceSyncVideos', 'ReleaseId')
 $hasExplicitDeployOpts = $false
 foreach ($optName in $explicitDeployOpts) {
     if ($PSBoundParameters.ContainsKey($optName)) {
@@ -856,6 +1022,7 @@ if ($doBackend) {
 if ($doFrontend) {
     $remoteFrontend = "$webRoot/releases/$release"
     Invoke-UploadRelease -LocalPath $frontendLocal -RemotePath $remoteFrontend -SshTarget $sshTarget
+    Sync-FrontendSharedVideos -RepoPath $frontendLocal -WebRoot $webRoot -SshTarget $sshTarget -Force:$ForceSyncVideos
 }
 
 $finalizeArgs = @($Target, $release)
@@ -864,6 +1031,10 @@ if ($Migrate) { $finalizeArgs += '--with-migrate' }
 $finalizeCmd = "cd '$deployRoot' && bash ./finalize-release.sh $($finalizeArgs -join ' ')"
 Write-Step "Finalizing on server"
 Invoke-Ssh -RemoteCommand $finalizeCmd
+
+if ($doFrontend) {
+    Ensure-FrontendCurrentVideosLink -WebRoot $webRoot -SshTarget $sshTarget
+}
 
 Write-Step "Deploy finished"
 Write-Host "Release id: $release"

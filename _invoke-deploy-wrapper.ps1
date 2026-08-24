@@ -13,6 +13,7 @@ param(
     [switch] $Migrate,
     [switch] $SkipUpload,
     [switch] $SyncDeploymentScripts,
+    [switch] $ForceSyncVideos,
 
     [string] $ReleaseId = ''
 )

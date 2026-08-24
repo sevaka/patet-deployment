@@ -32,3 +32,6 @@ BACKEND_SHARED_FILES=(
 FRONTEND_SHARED_FILES=(
   ".env"
 )
+
+# Demo MP4s live here once per VPS; each release symlinks public/assets/videos -> this dir.
+WEB_SHARED_VIDEOS_DIR="${WEB_SHARED_VIDEOS_DIR:-$WEB_ROOT/shared/assets-videos}"

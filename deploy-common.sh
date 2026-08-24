@@ -287,11 +287,39 @@ patet_activate_backend_release() {
   cleanup_releases_keep_distinct_successful_sha "$API_ROOT" "$KEEP_DISTINCT_SUCCESSFUL_SHAS" backend
 }
 
+# patet_link_shared_frontend_videos <release_dir>
+# Point release public/assets/videos at the persistent shared store so MP4s are not
+# duplicated in every release. If this release still has real video files (git clone),
+# copy them into the shared store first.
+patet_link_shared_frontend_videos() {
+  local release_dir="$1"
+  local shared_videos="${WEB_SHARED_VIDEOS_DIR:-$WEB_ROOT/shared/assets-videos}"
+  local release_videos="$release_dir/public/assets/videos"
+  local count
+
+  mkdir -p "$shared_videos" "$release_dir/public/assets"
+
+  if [[ -d "$release_videos" && ! -L "$release_videos" ]]; then
+    find "$release_videos" -maxdepth 1 -type f \( -iname '*.mp4' -o -iname '*.mov' \) -exec cp -f {} "$shared_videos/" \;
+    rm -rf "$release_videos"
+  elif [[ -e "$release_videos" || -L "$release_videos" ]]; then
+    rm -rf "$release_videos"
+  fi
+
+  ln -sfn "$shared_videos" "$release_videos"
+  count="$(find "$shared_videos" -maxdepth 1 -type f \( -iname '*.mp4' -o -iname '*.mov' \) | wc -l | tr -d ' ')"
+  echo "Frontend videos -> $shared_videos ($count files)"
+  if [[ "$count" -eq 0 ]]; then
+    echo "WARNING: shared demo videos dir is empty. Demo MP4 URLs will 404 until the next Windows frontend deploy copies them."
+  fi
+}
+
 # patet_activate_frontend_release <release_dir>
 patet_activate_frontend_release() {
   local release_dir="$1"
 
   assert_frontend_build_artifacts "$release_dir"
+  patet_link_shared_frontend_videos "$release_dir"
 
   ln -sfn "$release_dir" "$WEB_ROOT/current"
   echo "Frontend current -> $(readlink -f "$WEB_ROOT/current")"
