@@ -108,14 +108,29 @@ verify_backend_health() {
 
 # Optional Host header for loopback health checks (commercial Next.js rejects bare 127.0.0.1).
 # Auto-detected from WEB_ROOT/shared/.env when NEXT_PUBLIC_COMMERCIAL_MULTI_TENANT=true.
+# Must not use grep-in-pipeline: missing keys make grep exit 1, and set -o pipefail
+# aborts verify_frontend_health before curl (silent "ssh failed with exit code 1").
+patet_env_file_value() {
+  local file="$1"
+  local key="$2"
+  awk -F= -v k="$key" '
+    index($0, k "=") == 1 {
+      sub(/^[^=]+=/, "")
+      gsub(/\r/, "")
+      print
+      exit
+    }
+  ' "$file" 2>/dev/null | tr -d '"' | tr '[:upper:]' '[:lower:]' | xargs || true
+}
+
 patet_frontend_health_curl_args() {
   local -n _out=$1
   _out=()
   local env_file="${WEB_ROOT}/shared/.env"
   if [[ -f "$env_file" ]]; then
     local commercial domain
-    commercial="$(grep -E '^NEXT_PUBLIC_COMMERCIAL_MULTI_TENANT=' "$env_file" 2>/dev/null | head -1 | cut -d= -f2- | tr -d $'\r\"' | tr '[:upper:]' '[:lower:]' | xargs)"
-    domain="$(grep -E '^NEXT_PUBLIC_COMMERCIAL_PLATFORM_DOMAIN=' "$env_file" 2>/dev/null | head -1 | cut -d= -f2- | tr -d $'\r\"' | tr '[:upper:]' '[:lower:]' | xargs)"
+    commercial="$(patet_env_file_value "$env_file" NEXT_PUBLIC_COMMERCIAL_MULTI_TENANT)"
+    domain="$(patet_env_file_value "$env_file" NEXT_PUBLIC_COMMERCIAL_PLATFORM_DOMAIN)"
     if [[ "$commercial" == "true" && -n "$domain" ]]; then
       _out+=(-H "Host: ${domain}")
       return 0
@@ -127,7 +142,7 @@ patet_frontend_health_curl_args() {
 }
 
 verify_frontend_health() {
-  patet_log "Verifying frontend"
+  patet_log "Verifying frontend (will retry while HTTP is 000 or empty — app still starting)"
   local curl_extra=()
   patet_frontend_health_curl_args curl_extra
   local curl_hint="curl -fsS"
@@ -136,13 +151,28 @@ verify_frontend_health() {
   fi
   curl_hint+=" \"$FRONTEND_HEALTH_URL\""
   echo "Manual check (same as this script): $curl_hint"
-  if ! curl -fsS "${curl_extra[@]}" "$FRONTEND_HEALTH_URL" >/dev/null; then
-    echo "Frontend verification failed."
-    echo "Retry manually: curl -fsS \"$FRONTEND_HEALTH_URL\""
-    echo "With response headers: curl -fsSI \"$FRONTEND_HEALTH_URL\""
-    exit 1
-  fi
-  echo "Frontend looks up."
+  local attempt=1
+  local code=""
+
+  while [[ "$attempt" -le "$FRONTEND_VERIFY_MAX_ATTEMPTS" ]]; do
+    code="$(
+      curl -sS -o /dev/null -w "%{http_code}" \
+        --connect-timeout 3 --max-time 10 \
+        "${curl_extra[@]}" \
+        "$FRONTEND_HEALTH_URL" 2>/dev/null || true
+    )"
+    if [[ "$code" == "200" ]]; then
+      echo "Frontend looks up (HTTP $code) after attempt $attempt/$FRONTEND_VERIFY_MAX_ATTEMPTS"
+      return 0
+    fi
+    echo "  ... not ready (HTTP ${code:-000}), attempt $attempt/$FRONTEND_VERIFY_MAX_ATTEMPTS — sleeping ${FRONTEND_VERIFY_SLEEP_SECS}s"
+    sleep "$FRONTEND_VERIFY_SLEEP_SECS"
+    attempt=$((attempt + 1))
+  done
+  echo "Frontend verification failed after $FRONTEND_VERIFY_MAX_ATTEMPTS attempts. Last HTTP code: ${code:-000}"
+  echo "Retry manually: curl -fsS \"$FRONTEND_HEALTH_URL\""
+  echo "With response headers: curl -fsSI \"$FRONTEND_HEALTH_URL\""
+  exit 1
 }
 
 run_backend_migrations() {

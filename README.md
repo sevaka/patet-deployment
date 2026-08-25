@@ -258,7 +258,7 @@ wsl sudo apt update && wsl sudo apt install -y rsync
 | Stack | Check |
 |-------|--------|
 | Backend | `curl -sS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:57303/api/v1/auth/me` → `200` or `401` |
-| Frontend | `curl -fsS http://127.0.0.1:4993/` |
+| Frontend | `curl -fsS http://127.0.0.1:4993/` (finalize retries like backend while Next.js is still starting) |
 
 ```bash
 cd /var/www/patet-deployment

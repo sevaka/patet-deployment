@@ -623,20 +623,20 @@ function Get-RemoteFrontendVideoHashMap {
         [string] $SshTarget,
         [string] $RemoteDir
     )
+    # Windows OpenSSH strips double quotes from the remote argv, so `cut -d" "` and
+    # `[ -f "$f" ]` break (filenames with spaces, empty cut delimiter). Use find -exec.
     $remoteCmd = (
-        'mkdir -p ''{0}''; cd ''{0}''; shopt -s nullglob; ' +
-        'for f in *.mp4 *.MP4 *.mov *.MOV; do [ -f "$f" ] || continue; ' +
-        'h=$(sha256sum -- "$f" | cut -d" " -f1); printf "%s\t%s\n" "$f" "$h"; done'
+        "mkdir -p '{0}'; cd '{0}'; " +
+        "find . -maxdepth 1 -type f \( -iname '*.mp4' -o -iname '*.mov' \) -exec sha256sum {{}} +"
     ) -f $RemoteDir
     $lines = Invoke-DeploySsh -SshTarget $SshTarget -RemoteCommand $remoteCmd -CaptureOutput
     $map = @{}
     foreach ($line in @($lines)) {
         $text = "$line".Trim()
         if ([string]::IsNullOrWhiteSpace($text)) { continue }
-        $parts = $text -split "`t", 2
-        if ($parts.Count -ne 2) { continue }
-        $name = $parts[0].Trim()
-        $hash = $parts[1].Trim().ToLowerInvariant()
+        if ($text -notmatch '^([a-fA-F0-9]{64})\s+(.+)$') { continue }
+        $hash = $Matches[1].ToLowerInvariant()
+        $name = [System.IO.Path]::GetFileName($Matches[2].Trim())
         if ($name -and $hash) {
             $map[$name] = $hash
         }
@@ -949,7 +949,8 @@ function Sync-DeploymentScriptsToServer {
         Write-Host "Uploading deployment script $f"
         Invoke-DeployScp -LocalPath $local -RemoteSpec "${SshTarget}:${dest}/$f"
     }
-    Invoke-Ssh "sed -i 's/\r$//' '$dest'/*.sh 2>/dev/null || true; chmod +x '$dest/finalize-release.sh' '$dest/deploy.sh' '$dest/rollback.sh' 2>/dev/null || true"
+    # Perl \r/\n avoids PowerShell eating `$` in sed 's/\r$//' and bash treating "\r" as the letter r.
+    Invoke-Ssh "perl -pi -e 's/\r\n|\r/\n/g' '$dest'/*.sh 2>/dev/null || true; chmod +x '$dest/finalize-release.sh' '$dest/deploy.sh' '$dest/rollback.sh' 2>/dev/null || true"
 }
 
 # --- main ---
