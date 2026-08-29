@@ -7,7 +7,9 @@ Scripts on the VPS live under `/var/www/patet-deployment` (paths in `deploy-conf
 | Goal | Where | Command |
 |------|--------|---------|
 | Deploy **patet.am** (Server 1) | Windows PC | `.\deploy-patet.ps1` |
+| Deploy **patet.am** (Server 1) | Linux PC | `./deploy-patet.sh` |
 | Deploy **commercial** (Server 2, e.g. parcel-ops.com) | Windows PC | `.\deploy-commercial.ps1` |
+| Deploy **commercial** (Server 2) | Linux PC | `./deploy-commercial.sh` |
 | **Pre-deploy API smoke** (from `patet-qa-tests` on your PC) | Windows PC | `cd ..\patet-qa-tests` then `npm run test:before-deploy` |
 | Build on Windows, run on Ubuntu (advanced) | Windows PC | `.\deploy-from-windows.ps1 -Profile patet-am -Target all` |
 | Build and deploy entirely on the server | Ubuntu VPS | `./deploy.sh all --with-migrate` |
@@ -329,8 +331,11 @@ Copy from `deploy.local.env.example`:
 | `deploy.sh` | Clone/build on **server**, symlink `current`, PM2 |
 | `finalize-release.sh` | Finalize **Windows-uploaded** release |
 | `deploy-patet.ps1` | Deploy to patet.am (`profiles/patet-am.env`) |
+| `deploy-patet.sh` | Same as above from Linux (`profiles/patet-am.env`) |
 | `deploy-commercial.ps1` | Deploy to commercial Server 2 (`profiles/commercial.env`) |
-| `deploy-from-windows.ps1` | Build on Windows, upload, SSH finalize (`-Profile patet-am\|commercial`) |
+| `deploy-commercial.sh` | Same as above from Linux |
+| `deploy-from-windows.ps1` | Build locally (Windows), upload, SSH finalize (`-Profile patet-am\|commercial`) |
+| `deploy-from-linux.sh` | Same flow from Linux (`--profile patet-am\|commercial`) |
 | `profiles/*.env.example` | Templates for per-server SSH + frontend build vars |
 | `deploy.local.env.example` | Legacy template for Windows SSH settings |
 | `bootstrap_release_layout.sh` | One-time `releases/` + `shared/` dirs |

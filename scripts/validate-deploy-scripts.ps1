@@ -8,7 +8,7 @@ $bash = @(
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
 if ($bash) {
-    foreach ($script in @('deploy.sh', 'finalize-release.sh', 'deploy-common.sh', 'deploy-config.sh')) {
+    foreach ($script in @('deploy.sh', 'finalize-release.sh', 'deploy-common.sh', 'deploy-config.sh', 'deploy-from-linux.sh')) {
         $path = Join-Path $deployDir $script
         & $bash -n $path
         if ($LASTEXITCODE -ne 0) { throw "bash -n failed: $script" }
