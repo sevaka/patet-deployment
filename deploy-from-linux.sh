@@ -20,9 +20,13 @@ declare -A FRONTEND_BUILD_ENV=()
 
 usage() {
   cat <<'EOF'
-Usage: deploy-from-linux.sh [backend|frontend|all] [options]
+Usage: deploy-from-linux.sh [backend|frontend|all|videos] [options]
 
 Build locally, upload release artifacts, finalize on the VPS (OpenSSH + rsync/scp).
+
+Targets:
+  backend|frontend|all        App deploy (default: all). Demo videos are NOT uploaded.
+  videos                      Upload demo MP4/MOV to the shared store only (no app build).
 
 Options:
   --profile NAME              patet-am (default) or commercial
@@ -30,7 +34,7 @@ Options:
   --skip-upload               Build only; do not upload or finalize
   --migrate                   Run backend migrations during finalize
   --sync-deployment-scripts   Upload finalize-release.sh, deploy-common.sh, etc.
-  --force-sync-videos         Re-upload all demo MP4/MOV even if SHA-256 matches
+  --force-sync-videos         With target videos: re-upload even if SHA-256 matches
   --release-id ID             Override release folder name (default: Asia/Yerevan timestamp)
   -h, --help                  Show this help
 
@@ -38,6 +42,8 @@ Examples:
   ./deploy-patet.sh
   ./deploy-patet.sh backend
   ./deploy-patet.sh all --migrate
+  ./deploy-patet.sh videos
+  ./deploy-patet.sh videos --force-sync-videos
   ./deploy-from-linux.sh frontend --sync-deployment-scripts
   ./deploy-patet.sh all --skip-build --release-id 2026-08-29_120000
 
@@ -70,7 +76,7 @@ require_cmd() {
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      backend|frontend|all)
+      backend|frontend|all|videos)
         TARGET="$1"
         HAS_EXPLICIT_DEPLOY_OPTS=true
         shift
@@ -548,7 +554,7 @@ print_manual_command() {
   [[ "$TARGET" != all ]] && cmd+=" $TARGET"
   [[ "$MIGRATE" == true ]] && cmd+=" --migrate"
   [[ "$SYNC_SCRIPTS" == true ]] && cmd+=" --sync-deployment-scripts"
-  [[ "$FORCE_VIDEOS" == true ]] && cmd+=" --force-sync-videos"
+  [[ "$TARGET" == videos && "$FORCE_VIDEOS" == true ]] && cmd+=" --force-sync-videos"
   [[ "$SKIP_BUILD" == true ]] && cmd+=" --skip-build"
   [[ "$SKIP_UPLOAD" == true ]] && cmd+=" --skip-upload"
   [[ -n "$RELEASE_ID" ]] && cmd+=" --release-id \"$RELEASE_ID\""
@@ -614,8 +620,13 @@ deploy_interactive_quick() {
   case "$deploy_target" in
     backend) target_label="backend only" ;;
     frontend) target_label="frontend only" ;;
+    videos) target_label="demo videos only" ;;
     *) target_label="backend + frontend" ;;
   esac
+  if [[ "$deploy_target" == videos ]]; then
+    print_deploy_summary "Quick: demo videos only (hash-skip unchanged), no app build/upload"
+    return 0
+  fi
   if [[ "$deploy_target" == frontend ]]; then
     migrate_label="n/a"
   elif [[ "$with_migrate" == true ]]; then
@@ -623,7 +634,7 @@ deploy_interactive_quick() {
   else
     migrate_label="no"
   fi
-  print_deploy_summary "Quick: $target_label, full build + upload + finalize, migrations=$migrate_label, no script sync"
+  print_deploy_summary "Quick: $target_label, full build + upload + finalize, migrations=$migrate_label, no script sync, videos=skipped"
 }
 
 deploy_interactive_detailed() {
@@ -632,17 +643,21 @@ deploy_interactive_detailed() {
   pick="$(read_number_choice "What to deploy?" 3 \
     "Backend only (patet-api)" \
     "Frontend only (patet-website)" \
-    "Both (backend + frontend)")"
+    "Both (backend + frontend)" \
+    "Demo videos only (shared store)")"
   case "$pick" in
     1) TARGET="backend" ;;
     2) TARGET="frontend" ;;
+    4) TARGET="videos" ;;
     *) TARGET="all" ;;
   esac
 
   includes_backend=false
   includes_frontend=false
+  includes_videos=false
   [[ "$TARGET" == backend || "$TARGET" == all ]] && includes_backend=true
   [[ "$TARGET" == frontend || "$TARGET" == all ]] && includes_frontend=true
+  [[ "$TARGET" == videos ]] && includes_videos=true
 
   if [[ "$includes_backend" == true ]]; then
     pick="$(read_number_choice "Run backend migrations during finalize?" 1 \
@@ -660,44 +675,45 @@ deploy_interactive_detailed() {
   SYNC_SCRIPTS=false
   [[ "$pick" -eq 2 ]] && SYNC_SCRIPTS=true
 
-  if [[ "$includes_frontend" == true ]]; then
-    pick="$(read_number_choice "Re-upload all demo MP4s to the shared store (even if unchanged)?" 1 \
-      "No - skip files whose SHA-256 already matches the server" \
-      "Yes - copy every local public/assets/videos file again")"
+  if [[ "$includes_videos" == true ]]; then
+    pick="$(read_number_choice "Demo video upload mode?" 1 \
+      "Hash-skip - only new or changed files" \
+      "Force - re-upload every local public/assets/videos file")"
     FORCE_VIDEOS=false
     [[ "$pick" -eq 2 ]] && FORCE_VIDEOS=true
+    SKIP_BUILD=true
+    SKIP_UPLOAD=false
   else
     FORCE_VIDEOS=false
-  fi
+    pick="$(read_number_choice "Deploy mode?" 1 \
+      "Full - build locally, upload, finalize on server" \
+      "Build only - no upload or finalize" \
+      "Upload + finalize only - skip local build (artifacts must exist)")"
+    case "$pick" in
+      2)
+        SKIP_BUILD=false
+        SKIP_UPLOAD=true
+        ;;
+      3)
+        SKIP_BUILD=true
+        SKIP_UPLOAD=false
+        ;;
+      *)
+        SKIP_BUILD=false
+        SKIP_UPLOAD=false
+        ;;
+    esac
 
-  pick="$(read_number_choice "Deploy mode?" 1 \
-    "Full - build locally, upload, finalize on server" \
-    "Build only - no upload or finalize" \
-    "Upload + finalize only - skip local build (artifacts must exist)")"
-  case "$pick" in
-    2)
-      SKIP_BUILD=false
-      SKIP_UPLOAD=true
-      ;;
-    3)
-      SKIP_BUILD=true
-      SKIP_UPLOAD=false
-      ;;
-    *)
-      SKIP_BUILD=false
-      SKIP_UPLOAD=false
-      ;;
-  esac
-
-  if [[ "$SKIP_BUILD" == true && -z "$RELEASE_ID" ]]; then
-    pick="$(read_number_choice "Reuse an existing release folder on the server?" 1 \
-      "No - generate a new release id (timestamp)" \
-      "Yes - enter an existing release id")"
-    if [[ "$pick" -eq 2 ]]; then
-      read -r -p "Release id (e.g. 2026-05-22_161454): " RELEASE_ID
-      RELEASE_ID="${RELEASE_ID#"${RELEASE_ID%%[![:space:]]*}"}"
-      RELEASE_ID="${RELEASE_ID%"${RELEASE_ID##*[![:space:]]}"}"
-      [[ -n "$RELEASE_ID" ]] || die "Release id is required when skipping build without a new timestamp."
+    if [[ "$SKIP_BUILD" == true && -z "$RELEASE_ID" ]]; then
+      pick="$(read_number_choice "Reuse an existing release folder on the server?" 1 \
+        "No - generate a new release id (timestamp)" \
+        "Yes - enter an existing release id")"
+      if [[ "$pick" -eq 2 ]]; then
+        read -r -p "Release id (e.g. 2026-05-22_161454): " RELEASE_ID
+        RELEASE_ID="${RELEASE_ID#"${RELEASE_ID%%[![:space:]]*}"}"
+        RELEASE_ID="${RELEASE_ID%"${RELEASE_ID##*[![:space:]]}"}"
+        [[ -n "$RELEASE_ID" ]] || die "Release id is required when skipping build without a new timestamp."
+      fi
     fi
   fi
 
@@ -706,17 +722,18 @@ deploy_interactive_detailed() {
   else
     migrate_summary="n/a"
   fi
-  if [[ "$SKIP_UPLOAD" == true ]]; then
+  if [[ "$includes_videos" == true ]]; then
+    mode_summary="videos only"
+    video_summary=$([[ "$FORCE_VIDEOS" == true ]] && echo force || echo hash-skip)
+  elif [[ "$SKIP_UPLOAD" == true ]]; then
     mode_summary="build only"
+    video_summary="skipped"
   elif [[ "$SKIP_BUILD" == true ]]; then
     mode_summary="upload + finalize"
+    video_summary="skipped"
   else
     mode_summary="full"
-  fi
-  if [[ "$includes_frontend" == true ]]; then
-    video_summary=$([[ "$FORCE_VIDEOS" == true ]] && echo force || echo hash-skip)
-  else
-    video_summary="n/a"
+    video_summary="skipped"
   fi
   summary="Target=$TARGET, migrations=$migrate_summary, sync scripts=$([[ "$SYNC_SCRIPTS" == true ]] && echo yes || echo no), videos=$video_summary, mode=$mode_summary"
   [[ -n "$RELEASE_ID" ]] && summary+=", release id=$RELEASE_ID"
@@ -734,6 +751,7 @@ deploy_interactive_prompts() {
     "Frontend only" \
     "Backend + frontend" \
     "Backend + frontend + migrations" \
+    "Demo videos only (shared store)" \
     "More options (sync scripts, deploy mode, release id, etc.)")"
 
   case "$entry_pick" in
@@ -741,6 +759,7 @@ deploy_interactive_prompts() {
     2) deploy_interactive_quick frontend false ;;
     3) deploy_interactive_quick all false ;;
     4) deploy_interactive_quick all true ;;
+    5) deploy_interactive_quick videos false ;;
     *) deploy_interactive_detailed ;;
   esac
 }
@@ -779,9 +798,35 @@ main() {
     print_manual_command
   fi
 
-  local do_backend=false do_frontend=false
+  local do_backend=false do_frontend=false do_videos=false
   [[ "$TARGET" == backend || "$TARGET" == all ]] && do_backend=true
   [[ "$TARGET" == frontend || "$TARGET" == all ]] && do_frontend=true
+  [[ "$TARGET" == videos ]] && do_videos=true
+
+  if [[ "$do_videos" == true ]]; then
+    if [[ "$FORCE_VIDEOS" != true ]]; then
+      FORCE_VIDEOS=false
+    fi
+    if [[ "$SKIP_UPLOAD" == true ]]; then
+      die "Target videos cannot be combined with --skip-upload"
+    fi
+    require_cmd ssh
+    require_cmd scp
+    verify_ssh_connectivity
+    if [[ "$SYNC_SCRIPTS" == true ]]; then
+      sync_deployment_scripts "$ssh_target"
+    fi
+    sync_frontend_shared_videos "$frontend_local" "$web_root" "$ssh_target" "$FORCE_VIDEOS"
+    ensure_frontend_videos_link "$web_root" "$ssh_target"
+    log_step "Video sync finished"
+    echo "Check status on server: ssh $ssh_target \"cd $deploy_root && ./deploy.sh status all\""
+    exit 0
+  fi
+
+  if [[ "$FORCE_VIDEOS" == true ]]; then
+    echo "Warning: --force-sync-videos ignored for target=$TARGET (use: ./$(wrapper_script_name) videos --force-sync-videos)" >&2
+    FORCE_VIDEOS=false
+  fi
 
   if [[ "$SKIP_BUILD" != true ]]; then
     $do_backend && yarn_build "$backend_local" backend
@@ -807,7 +852,6 @@ main() {
 
   if $do_frontend; then
     upload_release "$frontend_local" "$web_root/releases/$release" "$ssh_target"
-    sync_frontend_shared_videos "$frontend_local" "$web_root" "$ssh_target" "$FORCE_VIDEOS"
   fi
 
   local finalize_cmd="cd '$deploy_root' && bash ./finalize-release.sh $TARGET $release"

@@ -6,7 +6,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('backend', 'frontend', 'all')]
+    [ValidateSet('backend', 'frontend', 'all', 'videos')]
     [string] $Target = 'all',
 
     [switch] $SkipBuild,

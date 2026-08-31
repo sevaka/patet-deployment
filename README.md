@@ -106,7 +106,8 @@ Default flow: **local build → upload → finalize on Linux** (`yarn install`, 
 | 2 | Frontend only |
 | 3 | Backend + frontend (default) |
 | 4 | Backend + frontend + migrations |
-| 5 | More options (sync scripts, deploy mode, release id, etc.) |
+| 5 | Demo videos only (shared store) |
+| 6 | More options (sync scripts, deploy mode, release id, etc.) |
 
 The script prints an equivalent **copy for next time** command line.
 
@@ -114,21 +115,22 @@ Advanced: `.\deploy-from-windows.ps1 -Profile patet-am|commercial` (same as wrap
 
 | Flag | When to use |
 |------|----------------|
-| `-Target backend` / `frontend` / `all` | Ship one stack or both |
+| `-Target backend` / `frontend` / `all` | Ship one stack or both (demo videos are **not** uploaded) |
+| `-Target videos` | Upload demo MP4/MOV to the shared store only (no app build) |
 | `-SkipBuild` | Artifacts already built locally |
 | `-Migrate` | Run `yarn migration:run` on backend finalize |
 | `-SkipUpload` | Build only; no upload or finalize |
 | `-ReleaseId 2026-05-20_120000` | Reuse or fix a specific release folder |
 | `-SyncDeploymentScripts` | Push updated `finalize-release.sh`, `deploy-common.sh`, etc. to the server |
-| `-ForceSyncVideos` | Re-copy every local `public/assets/videos` MP4/MOV even if the server hash already matches |
+| `-ForceSyncVideos` | With `-Target videos`: re-copy every local MP4/MOV even if hashes match |
 
 What the script does:
 
 1. `yarn install` + `yarn build` locally (backend → `dist/src/main.js`, frontend → `.next/BUILD_ID`).
 2. Writes `.patet-upload-sha` from local `git HEAD`.
 3. Uploads to `/var/www/patet-api/releases/<id>` and/or `/var/www/patet-website/releases/<id>`. **Frontend `*.mp4` / `*.mov` are excluded** from this upload.
-4. Copies new or changed demo videos once into `/var/www/patet-website/shared/assets-videos/` (SHA-256 skip if unchanged). Unchanged files are not uploaded again.
-5. SSH runs `./finalize-release.sh <target> <id>` on the server, then points `current/public/assets/videos` at that shared folder.
+4. SSH runs `./finalize-release.sh <target> <id>` on the server, then points `current/public/assets/videos` at the shared folder (symlink only; no video upload).
+5. Demo videos upload **only** with `-Target videos` (menu option 5 / `./deploy-patet.sh videos`).
 
 **Typical cadence:** use `-SyncDeploymentScripts` when deployment scripts changed; otherwise routine deploy is just `-Target all`.
 
@@ -142,14 +144,22 @@ Demo MP4s in `patet-website/public/assets/videos/` are ~62 MB and would otherwis
 | `/var/www/patet-website/shared/assets-videos/` | Persistent store on that server (patet.am and parcel-ops.com each have their own) |
 | `/var/www/patet-website/current/public/assets/videos` | Symlink to the shared store so Next.js still serves `/assets/videos/...` |
 
-First frontend deploy after this change uploads the videos once (~62 MB). Later deploys skip them unless a file changes (or you pass `-ForceSyncVideos`).
-
-Do this on **each** production server the first time (they do not share disk):
+Routine frontend/backend deploys do **not** upload demo videos. Upload them explicitly (hash-skip unchanged; ~62 MB when files are new/changed):
 
 ```powershell
-.\deploy-patet.ps1 -Target frontend -SyncDeploymentScripts
-.\deploy-commercial.ps1 -Target frontend -SyncDeploymentScripts
+.\deploy-patet.ps1 -Target videos
+.\deploy-commercial.ps1 -Target videos
+# force every file:
+.\deploy-patet.ps1 -Target videos -ForceSyncVideos
 ```
+
+```bash
+./deploy-patet.sh videos
+./deploy-commercial.sh videos
+./deploy-patet.sh videos --force-sync-videos
+```
+
+Do this on **each** production server when videos change (they do not share disk).
 
 ### Resume after a failed upload
 

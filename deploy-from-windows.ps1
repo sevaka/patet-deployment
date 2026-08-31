@@ -8,7 +8,8 @@
   Fallback: push git to Bitbucket, SSH and run ./deploy.sh on the server (see README).
 
 .PARAMETER Target
-  backend | frontend | all
+  backend | frontend | all | videos
+  App targets do not upload demo videos. Use videos for the shared MP4/MOV store only.
 
 .PARAMETER SkipBuild
   Upload only (artifacts must already exist locally).
@@ -26,16 +27,16 @@
   Rsync patet-deployment scripts to PATET_DEPLOYMENT_ROOT on the server before finalize.
 
 .PARAMETER ForceSyncVideos
-  Re-upload all local public/assets/videos/*.mp4 to the server shared store even if hashes match.
+  With -Target videos: re-upload all local public/assets/videos files even if hashes match.
 
 .NOTES
   Run with no parameters to open an interactive menu:
-  1 backend only, 2 frontend only, 3 back+front, 4 back+front+migrate, 5 more options.
+  1 backend, 2 frontend, 3 back+front, 4 back+front+migrate, 5 demo videos only, 6 more options.
 #>
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('backend', 'frontend', 'all')]
+    [ValidateSet('backend', 'frontend', 'all', 'videos')]
     [string] $Target = 'all',
 
     [switch] $SkipBuild,
@@ -777,7 +778,7 @@ function Get-DeployManualCommandLines {
     }
     if ($Migrate) { $cmd.Add('-Migrate') }
     if ($SyncDeploymentScripts) { $cmd.Add('-SyncDeploymentScripts') }
-    if ($ForceSyncVideos) { $cmd.Add('-ForceSyncVideos') }
+    if ($Target -eq 'videos' -and $ForceSyncVideos) { $cmd.Add('-ForceSyncVideos') }
     if ($SkipBuild) { $cmd.Add('-SkipBuild') }
     if ($SkipUpload) { $cmd.Add('-SkipUpload') }
     if ($ReleaseId) {
@@ -810,7 +811,7 @@ function Write-DeploySummary {
 
 function Invoke-DeployInteractiveQuick {
     param(
-        [ValidateSet('backend', 'frontend', 'all')]
+        [ValidateSet('backend', 'frontend', 'all', 'videos')]
         [string] $DeployTarget = 'all',
 
         [bool] $WithMigrate = $false
@@ -822,6 +823,11 @@ function Invoke-DeployInteractiveQuick {
     $script:ForceSyncVideos = $false
     $script:SkipBuild = $false
     $script:SkipUpload = $false
+
+    if ($DeployTarget -eq 'videos') {
+        Write-DeploySummary -SummaryLine 'Quick: demo videos only (hash-skip unchanged), no app build/upload'
+        return
+    }
 
     $targetLabel = switch ($DeployTarget) {
         'backend' { 'backend only' }
@@ -837,22 +843,25 @@ function Invoke-DeployInteractiveQuick {
     else {
         'no'
     }
-    Write-DeploySummary -SummaryLine "Quick: $targetLabel, full build + upload + finalize, migrations=$migrateLabel, no script sync"
+    Write-DeploySummary -SummaryLine "Quick: $targetLabel, full build + upload + finalize, migrations=$migrateLabel, no script sync, videos=skipped"
 }
 
 function Invoke-DeployInteractiveDetailed {
     $targetPick = Read-NumberChoice -Title 'What to deploy?' -Options @(
         'Backend only (patet-api)',
         'Frontend only (patet-website)',
-        'Both (backend + frontend)'
+        'Both (backend + frontend)',
+        'Demo videos only (shared store)'
     ) -DefaultIndex 3
     switch ($targetPick) {
         1 { $script:Target = 'backend' }
         2 { $script:Target = 'frontend' }
+        4 { $script:Target = 'videos' }
         default { $script:Target = 'all' }
     }
 
     $includesBackend = $script:Target -eq 'backend' -or $script:Target -eq 'all'
+    $includesVideos = $script:Target -eq 'videos'
     if ($includesBackend) {
         $migratePick = Read-NumberChoice -Title 'Run backend migrations during finalize?' -Options @(
             'No - skip migrations',
@@ -870,54 +879,60 @@ function Invoke-DeployInteractiveDetailed {
     ) -DefaultIndex 1
     $script:SyncDeploymentScripts = ($syncPick -eq 2)
 
-    $includesFrontend = $script:Target -eq 'frontend' -or $script:Target -eq 'all'
-    if ($includesFrontend) {
-        $videoPick = Read-NumberChoice -Title 'Re-upload all demo MP4s to the shared store (even if unchanged)?' -Options @(
-            'No - skip files whose SHA-256 already matches the server',
-            'Yes - copy every local public/assets/videos file again'
+    if ($includesVideos) {
+        $videoPick = Read-NumberChoice -Title 'Demo video upload mode?' -Options @(
+            'Hash-skip - only new or changed files',
+            'Force - re-upload every local public/assets/videos file'
         ) -DefaultIndex 1
         $script:ForceSyncVideos = ($videoPick -eq 2)
+        $script:SkipBuild = $true
+        $script:SkipUpload = $false
     }
     else {
         $script:ForceSyncVideos = $false
-    }
-
-    $modePick = Read-NumberChoice -Title 'Deploy mode?' -Options @(
-        'Full - build locally, upload, finalize on server',
-        'Build only - no upload or finalize',
-        'Upload + finalize only - skip local build (artifacts must exist)'
-    ) -DefaultIndex 1
-    switch ($modePick) {
-        2 {
-            $script:SkipBuild = $false
-            $script:SkipUpload = $true
-        }
-        3 {
-            $script:SkipBuild = $true
-            $script:SkipUpload = $false
-        }
-        default {
-            $script:SkipBuild = $false
-            $script:SkipUpload = $false
-        }
-    }
-
-    if ($script:SkipBuild -and -not $script:ReleaseId) {
-        $reuse = Read-NumberChoice -Title 'Reuse an existing release folder on the server?' -Options @(
-            'No - generate a new release id (timestamp)',
-            'Yes - enter an existing release id'
+        $modePick = Read-NumberChoice -Title 'Deploy mode?' -Options @(
+            'Full - build locally, upload, finalize on server',
+            'Build only - no upload or finalize',
+            'Upload + finalize only - skip local build (artifacts must exist)'
         ) -DefaultIndex 1
-        if ($reuse -eq 2) {
-            $script:ReleaseId = (Read-Host 'Release id (e.g. 2026-05-22_161454)').Trim()
-            if ([string]::IsNullOrWhiteSpace($script:ReleaseId)) {
-                throw 'Release id is required when skipping build without a new timestamp.'
+        switch ($modePick) {
+            2 {
+                $script:SkipBuild = $false
+                $script:SkipUpload = $true
+            }
+            3 {
+                $script:SkipBuild = $true
+                $script:SkipUpload = $false
+            }
+            default {
+                $script:SkipBuild = $false
+                $script:SkipUpload = $false
+            }
+        }
+
+        if ($script:SkipBuild -and -not $script:ReleaseId) {
+            $reuse = Read-NumberChoice -Title 'Reuse an existing release folder on the server?' -Options @(
+                'No - generate a new release id (timestamp)',
+                'Yes - enter an existing release id'
+            ) -DefaultIndex 1
+            if ($reuse -eq 2) {
+                $script:ReleaseId = (Read-Host 'Release id (e.g. 2026-05-22_161454)').Trim()
+                if ([string]::IsNullOrWhiteSpace($script:ReleaseId)) {
+                    throw 'Release id is required when skipping build without a new timestamp.'
+                }
             }
         }
     }
 
     $migrateSummary = if ($includesBackend) { if ($Migrate) { 'yes' } else { 'no' } } else { 'n/a' }
-    $modeSummary = if ($SkipUpload) { 'build only' } elseif ($SkipBuild) { 'upload + finalize' } else { 'full' }
-    $videoSummary = if ($includesFrontend) { if ($ForceSyncVideos) { 'force' } else { 'hash-skip' } } else { 'n/a' }
+    if ($includesVideos) {
+        $modeSummary = 'videos only'
+        $videoSummary = if ($ForceSyncVideos) { 'force' } else { 'hash-skip' }
+    }
+    else {
+        $modeSummary = if ($SkipUpload) { 'build only' } elseif ($SkipBuild) { 'upload + finalize' } else { 'full' }
+        $videoSummary = 'skipped'
+    }
     $summary = "Target=$Target, migrations=$migrateSummary, sync scripts=$(if ($SyncDeploymentScripts) { 'yes' } else { 'no' }), videos=$videoSummary, mode=$modeSummary"
     if ($ReleaseId) { $summary += ", release id=$ReleaseId" }
     Write-DeploySummary -SummaryLine $summary
@@ -933,6 +948,7 @@ function Invoke-DeployInteractivePrompts {
         'Frontend only',
         'Backend + frontend',
         'Backend + frontend + migrations',
+        'Demo videos only (shared store)',
         'More options (sync scripts, deploy mode, release id, etc.)'
     ) -DefaultIndex 3
 
@@ -941,6 +957,7 @@ function Invoke-DeployInteractivePrompts {
         2 { Invoke-DeployInteractiveQuick -DeployTarget frontend -WithMigrate:$false }
         3 { Invoke-DeployInteractiveQuick -DeployTarget all -WithMigrate:$false }
         4 { Invoke-DeployInteractiveQuick -DeployTarget all -WithMigrate:$true }
+        5 { Invoke-DeployInteractiveQuick -DeployTarget videos -WithMigrate:$false }
         default { Invoke-DeployInteractiveDetailed }
     }
 }
@@ -1010,6 +1027,27 @@ if ($hasExplicitDeployOpts) {
 
 $doBackend = $Target -eq 'backend' -or $Target -eq 'all'
 $doFrontend = $Target -eq 'frontend' -or $Target -eq 'all'
+$doVideos = $Target -eq 'videos'
+
+if ($doVideos) {
+    if ($SkipUpload) {
+        throw 'Target videos cannot be combined with -SkipUpload'
+    }
+    Assert-DeployTransportCommands
+    if ($SyncDeploymentScripts) {
+        Sync-DeploymentScriptsToServer -SshTarget $sshTarget
+    }
+    Sync-FrontendSharedVideos -RepoPath $frontendLocal -WebRoot $webRoot -SshTarget $sshTarget -Force:$ForceSyncVideos
+    Ensure-FrontendCurrentVideosLink -WebRoot $webRoot -SshTarget $sshTarget
+    Write-Step 'Video sync finished'
+    Write-Host "Check status on server: ssh $sshTarget `"cd $deployRoot && ./deploy.sh status all`""
+    exit 0
+}
+
+if ($ForceSyncVideos) {
+    Write-Warning "-ForceSyncVideos ignored for -Target $Target (use: -Target videos -ForceSyncVideos)"
+    $ForceSyncVideos = $false
+}
 
 if (-not $SkipBuild) {
     if ($doBackend) { Invoke-YarnBuild -RepoPath $backendLocal -Kind backend }
@@ -1035,7 +1073,6 @@ if ($doBackend) {
 if ($doFrontend) {
     $remoteFrontend = "$webRoot/releases/$release"
     Invoke-UploadRelease -LocalPath $frontendLocal -RemotePath $remoteFrontend -SshTarget $sshTarget
-    Sync-FrontendSharedVideos -RepoPath $frontendLocal -WebRoot $webRoot -SshTarget $sshTarget -Force:$ForceSyncVideos
 }
 
 $finalizeArgs = @($Target, $release)
