@@ -189,10 +189,12 @@ get_release_timestamp() {
   TZ=Asia/Yerevan date +%Y-%m-%d_%H%M%S
 }
 
+# Port flag: ssh uses -p; scp uses -P ( -p means "preserve times" for scp ).
 ssh_extra_args() {
+  local port_flag="${1:--p}"
   local -a args=()
   if [[ -n "${PATET_SSH_PORT:-}" ]]; then
-    args+=(-p "$PATET_SSH_PORT")
+    args+=("$port_flag" "$PATET_SSH_PORT")
   fi
   if [[ -n "${PATET_SSH_EXTRA_ARGS:-}" ]]; then
     # shellcheck disable=SC2206
@@ -239,7 +241,7 @@ invoke_scp() {
   local local_path="$1"
   local remote_spec="$2"
   # shellcheck disable=SC2046
-  scp $(ssh_extra_args) "$local_path" "$remote_spec"
+  scp $(ssh_extra_args -P) "$local_path" "$remote_spec"
 }
 
 rsync_rsh() {
@@ -253,20 +255,22 @@ rsync_rsh() {
 }
 
 upload_exclude_rsync() {
+  # Use --exclude=VALUE (one argv). "echo --exclude pat" becomes a single
+  # "--exclude pat" token when read into an array, which rsync 3.1.x rejects.
   local names=(
     node_modules .git .next/cache .next/trace .env .env.*
     coverage .cursor .turbo .vscode
   )
   local pat
   for pat in "${names[@]}"; do
-    echo --exclude "$pat"
-    echo --exclude "$pat/"
+    echo "--exclude=$pat"
+    echo "--exclude=$pat/"
   done
-  echo --exclude '*.mp4'
-  echo --exclude '*.MP4'
-  echo --exclude '*.mov'
-  echo --exclude '*.MOV'
-  echo --exclude '*.log'
+  echo '--exclude=*.mp4'
+  echo '--exclude=*.MP4'
+  echo '--exclude=*.mov'
+  echo '--exclude=*.MOV'
+  echo '--exclude=*.log'
 }
 
 upload_exclude_tar() {

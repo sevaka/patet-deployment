@@ -314,9 +314,15 @@ function Get-PatetUploadExcludePatterns {
 }
 
 function Get-SshOptionArgs {
+    param([switch] $ForScp)
     $args = @()
     if ($env:PATET_SSH_PORT) {
-        $args += '-p', $env:PATET_SSH_PORT
+        # ssh uses -p; scp uses -P (-p means preserve times for scp).
+        if ($ForScp) {
+            $args += '-P', $env:PATET_SSH_PORT
+        } else {
+            $args += '-p', $env:PATET_SSH_PORT
+        }
     }
     $extra = $env:PATET_SSH_EXTRA_ARGS
     if ($extra) {
@@ -427,7 +433,7 @@ function Invoke-DeployScp {
         if ($LASTEXITCODE -ne 0) { throw "pscp failed with exit code $LASTEXITCODE" }
         return
     }
-    $scpArgs = @(Get-SshOptionArgs) + @($LocalPath, $RemoteSpec)
+    $scpArgs = @(Get-SshOptionArgs -ForScp) + @($LocalPath, $RemoteSpec)
     Write-Host "scp $($scpArgs -join ' ')"
     Invoke-ExternalWithClosedStdin -FilePath 'scp' -ArgumentList $scpArgs
 }
