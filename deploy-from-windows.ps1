@@ -314,9 +314,15 @@ function Get-PatetUploadExcludePatterns {
 }
 
 function Get-SshOptionArgs {
+    $args = @()
+    if ($env:PATET_SSH_PORT) {
+        $args += '-p', $env:PATET_SSH_PORT
+    }
     $extra = $env:PATET_SSH_EXTRA_ARGS
-    if (-not $extra) { return @() }
-    return @($extra -split '\s+')
+    if ($extra) {
+        $args += @($extra -split '\s+')
+    }
+    return $args
 }
 
 # OpenSSH on Windows can block in PowerShell until Enter is pressed (stdin still attached).

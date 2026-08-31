@@ -345,11 +345,47 @@ Copy from `deploy.local.env.example`:
 
 ---
 
+## SSH on an alternate port (WiFi blocks port 22)
+
+Some networks (hotels, cafes) block **outbound** SSH on port 22. You can keep port 22 for normal access and add a second SSH port on the VPS.
+
+### One-time setup (on the server)
+
+Use **DigitalOcean → Droplet → Access → Launch Droplet Console** (browser terminal — no laptop SSH needed):
+
+```bash
+cd /var/www/patet-deployment && git pull
+bash ./scripts/enable-alt-ssh-port.sh 2222
+```
+
+If the script is not on the server yet, paste/run `scripts/enable-alt-ssh-port.sh` from this repo, or upload it once via the console.
+
+Also allow inbound **TCP 2222** in **DigitalOcean → Networking → Firewalls** if you use a cloud firewall.
+
+### Laptop / deploy profile
+
+In `profiles/patet-am.env`:
+
+```env
+PATET_SSH_PORT=2222
+```
+
+Test:
+
+```bash
+ssh -p 2222 -i ~/.ssh/id_rsa root@207.154.224.28 "echo ok"
+./deploy-patet.sh frontend
+```
+
+`deploy-from-linux.sh` and `deploy-from-windows.ps1` both read `PATET_SSH_PORT`.
+
+**Note:** If your WiFi only allows outbound **443** (HTTPS), port 2222 may still fail from that network — use mobile hotspot or server-side `./deploy.sh` via the DO console. Port 443 cannot be shared with SSH without `sslh` (nginx uses it for patet.am).
+
+---
+
 ## Troubleshooting
 
-| Symptom | Likely cause | Fix |
-|---------|----------------|-----|
-| Stuck at **tar+scp** for a long time | Packing **`.next/cache`** (~800MB+) or locked **`.next/trace`** | Pull latest `deploy-from-windows.ps1` (excludes cache/trace); stop `next dev` before deploy; watch for `Archive ready: N MB` log line |
+| `Connection refused` on SSH during deploy | WiFi blocks outbound port 22 | [SSH on an alternate port](#ssh-on-an-alternate-port-wifi-blocks-port-22); or DO Droplet Console + `./deploy.sh` on server |
 | SSH/scp **hangs until you press Enter** | OpenSSH still attached to PowerShell **stdin** | Pull latest `deploy-from-windows.ps1` (uses `ssh -n` + closed stdin for `scp`); or preflight: `ssh -n -i ... root@host "echo ok"` |
 | `rsync: not found` (WSL) | WSL without rsync | Ignore — script falls back to tar+scp; or install rsync in WSL |
 | `pipefail: invalid option name` | Shell scripts have Windows **CRLF** | On server: `sed -i 's/\r$//' /var/www/patet-deployment/*.sh`; re-run with `-SyncDeploymentScripts` |

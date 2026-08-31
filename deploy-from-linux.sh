@@ -155,6 +155,8 @@ load_deploy_profile() {
     name="${name%"${name##*[![:space:]]}"}"
     value="${line#*=}"
     value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%%#*}"
+    value="${value%"${value##*[![:space:]]}"}"
     if [[ "$value" == \"*\" && "$value" == *\" ]]; then
       value="${value:1:${#value}-2}"
     fi
@@ -188,11 +190,42 @@ get_release_timestamp() {
 }
 
 ssh_extra_args() {
-  if [[ -z "${PATET_SSH_EXTRA_ARGS:-}" ]]; then
+  local -a args=()
+  if [[ -n "${PATET_SSH_PORT:-}" ]]; then
+    args+=(-p "$PATET_SSH_PORT")
+  fi
+  if [[ -n "${PATET_SSH_EXTRA_ARGS:-}" ]]; then
+    # shellcheck disable=SC2206
+    local extra=($PATET_SSH_EXTRA_ARGS)
+    args+=("${extra[@]}")
+  fi
+  if [[ ${#args[@]} -eq 0 ]]; then
     return
   fi
-  # shellcheck disable=SC2086
-  echo $PATET_SSH_EXTRA_ARGS
+  echo "${args[@]}"
+}
+
+verify_ssh_connectivity() {
+  local ssh_target="${PATET_SSH_USER}@${PATET_SSH_HOST}"
+  local port="${PATET_SSH_PORT:-22}"
+  log_step "Checking SSH to $ssh_target (port $port)"
+  if timeout 10 ssh -n $(ssh_extra_args) -o ConnectTimeout=5 -o BatchMode=yes \
+    "$ssh_target" "echo ok" >/dev/null 2>&1; then
+    log_sub "SSH OK"
+    return 0
+  fi
+  local probe=""
+  probe="$(curl -s --max-time 5 http://example.com 2>/dev/null || true)"
+  if echo "$probe" | grep -qiE 'hotspot|captive|login required'; then
+    if [[ "$port" == "22" ]] && timeout 3 bash -c "echo >/dev/tcp/${PATET_SSH_HOST}/2222" 2>/dev/null; then
+      die "Cannot SSH on port 22 (WiFi hotspot). Port 2222 is reachable — set PATET_SSH_PORT=2222 in profiles/$PROFILE.env and retry."
+    fi
+    die "Cannot SSH to $ssh_target:port $port — this WiFi hotspot blocks outbound SSH. Complete hotspot login in a browser, or switch to mobile hotspot/VPN, then retry. If the build already finished, resume with: ./deploy-patet.sh <target> --skip-build --release-id <id>"
+  fi
+  if ! timeout 3 bash -c "echo >/dev/tcp/${PATET_SSH_HOST}/${port}" 2>/dev/null; then
+    die "Cannot reach SSH on ${PATET_SSH_HOST}:$port from this network (connection refused). Use mobile hotspot/VPN, or set PATET_SSH_PORT in profiles/$PROFILE.env if the server listens on another port."
+  fi
+  die "SSH to $ssh_target failed (port $port reachable but auth rejected). Check PATET_SSH_EXTRA_ARGS / key in profiles/$PROFILE.env."
 }
 
 invoke_ssh() {
@@ -337,8 +370,9 @@ upload_via_rsync() {
   local local_trail="${local_path%/}/"
   local rsh
   rsh="$(rsync_rsh)"
+  # RSYNC_RSH avoids old rsync builds misparsing `-e ssh -n -i …` as separate flags.
   # shellcheck disable=SC2086
-  if rsync -avz --delete -e "$rsh" "${excludes[@]}" "$local_trail" "${ssh_target}:${remote_path}/"; then
+  if RSYNC_RSH="$rsh" rsync -avz --delete "${excludes[@]}" "$local_trail" "${ssh_target}:${remote_path}/"; then
     return 0
   fi
   echo "Warning: rsync failed; falling back to tar+scp." >&2
@@ -757,6 +791,7 @@ main() {
 
   require_cmd ssh
   require_cmd scp
+  verify_ssh_connectivity
 
   if [[ "$SYNC_SCRIPTS" == true ]]; then
     sync_deployment_scripts "$ssh_target"
