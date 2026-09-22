@@ -55,11 +55,12 @@ curl -fsS http://127.0.0.1:4993/ || echo "frontend not up yet"
 | Step | Action |
 |------|--------|
 | 1 | Install **Node ≥ 20.12.2**, **Yarn**, **Git**. |
-| 2 | Use **OpenSSH** (`ssh`, `scp`) — built into Windows 10+. |
-| 3 | Clone repos next to each other, e.g. `Front_and_Back/patet-back-nestjs`, `patet-website`, `patet-deployment`. |
-| 4 | Copy `profiles/patet-am.env.example` → `profiles/patet-am.env` and `profiles/commercial.env.example` → `profiles/commercial.env` (gitignored). |
-| 5 | Set `PATET_SSH_HOST`, `PATET_SSH_USER`, and `PATET_SSH_EXTRA_ARGS` in each profile (see [Deploy profiles](#deploy-profiles)). |
-| 6 | Test SSH: `ssh -i C:\Users\YOU\.ssh\id_rsa USER@HOST "echo ok"` |
+| 2 | Allow local scripts (once per Windows user): `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` |
+| 3 | Use **OpenSSH** (`ssh`, `scp`) — built into Windows 10+. |
+| 4 | Clone repos next to each other, e.g. `Front_and_Back/patet-back-nestjs`, `patet-website`, `patet-deployment`. |
+| 5 | Copy `profiles/patet-am.env.example` → `profiles/patet-am.env` and `profiles/commercial.env.example` → `profiles/commercial.env` (gitignored). |
+| 6 | Set `PATET_SSH_HOST`, `PATET_SSH_USER`, and `PATET_SSH_EXTRA_ARGS` in each profile (see [Deploy profiles](#deploy-profiles)). |
+| 7 | Test SSH: `ssh -i C:\Users\YOU\.ssh\id_rsa USER@HOST "echo ok"` |
 
 Legacy: `deploy.local.env` / `deploy.local.commercial.env` still work if `profiles/*.env` is missing.
 
@@ -395,6 +396,7 @@ ssh -p 2222 -i ~/.ssh/id_rsa root@207.154.224.28 "echo ok"
 
 ## Troubleshooting
 
+| `cannot be loaded because running scripts is disabled` | PowerShell **ExecutionPolicy** is Restricted | `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` then retry `.\deploy-from-windows.ps1` |
 | `Connection refused` on SSH during deploy | WiFi blocks outbound port 22 | [SSH on an alternate port](#ssh-on-an-alternate-port-wifi-blocks-port-22); or DO Droplet Console + `./deploy.sh` on server |
 | SSH/scp **hangs until you press Enter** | OpenSSH still attached to PowerShell **stdin** | Pull latest `deploy-from-windows.ps1` (uses `ssh -n` + closed stdin for `scp`); or preflight: `ssh -n -i ... root@host "echo ok"` |
 | `rsync: not found` (WSL) | WSL without rsync | Ignore — script falls back to tar+scp; or install rsync in WSL |
