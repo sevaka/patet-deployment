@@ -26,6 +26,14 @@ FRONTEND_VERIFY_SLEEP_SECS="${FRONTEND_VERIFY_SLEEP_SECS:-2}"
 
 KEEP_DISTINCT_SUCCESSFUL_SHAS="${KEEP_DISTINCT_SUCCESSFUL_SHAS:-5}"
 
+# Yarn Classic cache for server installs. Empty = `yarn cache dir` (usually ~/.cache/yarn).
+# Deploy never runs `yarn cache clean`. Override to a shared path if needed.
+# PATET_YARN_CACHE_DIR=/var/www/.yarn-cache
+#
+# Set PATET_FORCE_YARN_INSTALL=1 after a Node upgrade or if node_modules looks corrupt.
+PATET_YARN_CACHE_DIR="${PATET_YARN_CACHE_DIR:-}"
+PATET_FORCE_YARN_INSTALL="${PATET_FORCE_YARN_INSTALL:-0}"
+
 BACKEND_SHARED_FILES=(
   ".env"
   "ca-certificate.crt"

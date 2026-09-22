@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Finalize a release uploaded from Windows (yarn install on Linux, symlink current, migrate, PM2).
+# Finalize a release uploaded from Windows (Linux yarn install, symlink current, migrate, PM2).
+# Yarn: reuse current node_modules when yarn.lock is unchanged; otherwise
+# --frozen-lockfile --prefer-offline (frontend also --production). Never upload Windows node_modules.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,6 +22,8 @@ finalize_usage() {
   echo "Environment:"
   echo "  PATET_WITH_BACKEND_MIGRATE=1|true   Same as --with-migrate"
   echo "  PATET_API_ROOT, PATET_WEB_ROOT       Override app roots (see deploy-config.sh)"
+  echo "  PATET_YARN_CACHE_DIR                 Persistent Yarn cache (default: yarn cache dir)"
+  echo "  PATET_FORCE_YARN_INSTALL=1           Skip node_modules reuse (Node upgrade / corrupt tree)"
 }
 
 WITH_BACKEND_MIGRATE=false
@@ -75,7 +79,7 @@ case "$ACTION" in
     _old_frontend_dir="$(readlink -f "$WEB_ROOT/current" 2>/dev/null || true)"
     capture_release_git_info _old_frontend_info "Frontend (patet-website)" "$_old_frontend_dir"
 
-    # Phase 1: yarn install both (fail fast before any PM2 change)
+    # Phase 1: seed/install node_modules both (fail fast before any PM2 change)
     patet_prepare_uploaded_backend "$RELEASE_NAME"
     patet_prepare_uploaded_frontend "$RELEASE_NAME"
 

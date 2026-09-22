@@ -226,21 +226,190 @@ ensure_frontend_shared_env() {
   fi
 }
 
-yarn_install_backend_release() {
-  local release_dir="$1"
-  cd "$release_dir"
-  yarn install
+_patet_read_stamp() {
+  local file="$1"
+  local val=""
+  if [[ -f "$file" ]]; then
+    IFS= read -r val <"$file" || true
+    val="${val//$'\r'/}"
+    val="${val//[[:space:]]/}"
+  fi
+  printf '%s' "$val"
 }
 
+patet_ensure_yarn_cache() {
+  require_cmd yarn
+  if [[ -z "${PATET_YARN_CACHE_DIR:-}" ]]; then
+    PATET_YARN_CACHE_DIR="$(yarn cache dir 2>/dev/null || true)"
+  fi
+  if [[ -z "${PATET_YARN_CACHE_DIR:-}" ]]; then
+    PATET_YARN_CACHE_DIR="${HOME}/.cache/yarn"
+  fi
+  mkdir -p "$PATET_YARN_CACHE_DIR"
+  echo "Yarn cache (kept across deploys): $PATET_YARN_CACHE_DIR"
+}
+
+# Copy current Linux node_modules into the new release when yarn.lock is unchanged.
+# Hardlinks when possible so rollback releases stay independent. Does not run yarn.
+# install_mode: full | production
+patet_try_reuse_node_modules() {
+  local app_root="$1"
+  local release_dir="$2"
+  local wanted_mode="$3"
+  local current current_mode current_node wanted_node
+
+  if [[ "${PATET_FORCE_YARN_INSTALL:-0}" == "1" || "${PATET_FORCE_YARN_INSTALL:-}" == "true" ]]; then
+    echo "PATET_FORCE_YARN_INSTALL is set — skipping node_modules reuse"
+    return 1
+  fi
+
+  current="$(readlink -f "$app_root/current" 2>/dev/null || true)"
+  if [[ -z "$current" || ! -d "$current" ]]; then
+    echo "No current release to reuse node_modules from"
+    return 1
+  fi
+  if [[ "$current" == "$(readlink -f "$release_dir")" ]]; then
+    echo "Release dir is already current — skipping node_modules reuse"
+    return 1
+  fi
+  if [[ ! -f "$current/yarn.lock" || ! -f "$release_dir/yarn.lock" ]]; then
+    echo "Missing yarn.lock on current or new release — will run yarn install"
+    return 1
+  fi
+  if ! cmp -s "$current/yarn.lock" "$release_dir/yarn.lock"; then
+    echo "yarn.lock changed vs current — will run yarn install --frozen-lockfile --prefer-offline"
+    return 1
+  fi
+  if [[ ! -d "$current/node_modules" ]]; then
+    echo "Current release has no node_modules — will run yarn install"
+    return 1
+  fi
+
+  current_mode="$(_patet_read_stamp "$current/.patet-yarn-install-mode")"
+  if [[ -z "$current_mode" ]]; then
+    current_mode="full"
+  fi
+  if [[ "$current_mode" != "$wanted_mode" ]]; then
+    if [[ "$wanted_mode" == "production" && "$current_mode" == "full" ]]; then
+      echo "Reusing full node_modules for production runtime (superset; yarn.lock unchanged)"
+    else
+      echo "node_modules install mode mismatch (current=$current_mode wanted=$wanted_mode) — will run yarn install"
+      return 1
+    fi
+  fi
+
+  current_node="$(_patet_read_stamp "$current/.patet-yarn-node-version")"
+  wanted_node="$(node -v)"
+  if [[ -n "$current_node" && "$current_node" != "$wanted_node" ]]; then
+    echo "Node version changed ($current_node -> $wanted_node) — will run yarn install (native modules)"
+    return 1
+  fi
+
+  rm -rf "$release_dir/node_modules"
+  if cp -al "$current/node_modules" "$release_dir/node_modules"; then
+    echo "Reused Linux node_modules via hardlinks from $current"
+  else
+    echo "Hardlink copy failed; copying node_modules from $current"
+    rm -rf "$release_dir/node_modules"
+    cp -a "$current/node_modules" "$release_dir/node_modules"
+    echo "Reused Linux node_modules via copy from $current"
+  fi
+
+  if [[ -f "$current/.patet-yarn-install-mode" ]]; then
+    cp -a "$current/.patet-yarn-install-mode" "$release_dir/.patet-yarn-install-mode"
+  else
+    printf 'full\n' > "$release_dir/.patet-yarn-install-mode"
+  fi
+  if [[ -f "$current/.patet-yarn-node-version" ]]; then
+    cp -a "$current/.patet-yarn-node-version" "$release_dir/.patet-yarn-node-version"
+  else
+    node -v > "$release_dir/.patet-yarn-node-version"
+  fi
+  return 0
+}
+
+patet_write_yarn_install_stamps() {
+  local release_dir="$1"
+  local install_mode="$2"
+  printf '%s\n' "$install_mode" > "$release_dir/.patet-yarn-install-mode"
+  node -v > "$release_dir/.patet-yarn-node-version"
+}
+
+# patet_install_release_node_modules <release_dir> <app_root> <full|production>
+patet_install_release_node_modules() {
+  local release_dir="$1"
+  local app_root="$2"
+  local install_mode="$3"
+  local saved_node_env="${NODE_ENV-}"
+  local -a yarn_args
+
+  if [[ ! -d "$release_dir" ]]; then
+    echo "Release directory does not exist: $release_dir"
+    exit 1
+  fi
+  if [[ ! -f "$release_dir/yarn.lock" ]]; then
+    echo "ERROR: missing yarn.lock in $release_dir (needed for frozen install / reuse)"
+    exit 1
+  fi
+  if [[ "$install_mode" != "full" && "$install_mode" != "production" ]]; then
+    echo "ERROR: install_mode must be full or production (got: $install_mode)"
+    exit 1
+  fi
+
+  patet_ensure_yarn_cache
+  cd "$release_dir"
+
+  if patet_try_reuse_node_modules "$app_root" "$release_dir" "$install_mode"; then
+    echo "Skipped yarn install (yarn.lock unchanged; reused Linux node_modules)"
+    return 0
+  fi
+
+  yarn_args=(--frozen-lockfile --prefer-offline --non-interactive --cache-folder "$PATET_YARN_CACHE_DIR")
+  if [[ "$install_mode" == "production" ]]; then
+    yarn_args+=(--production)
+    export NODE_ENV=production
+  else
+    unset NODE_ENV || true
+  fi
+
+  echo "Running: yarn install ${yarn_args[*]}"
+  if yarn install "${yarn_args[@]}"; then
+    if [[ -n "$saved_node_env" ]]; then
+      export NODE_ENV="$saved_node_env"
+    else
+      unset NODE_ENV || true
+    fi
+    patet_write_yarn_install_stamps "$release_dir" "$install_mode"
+    return 0
+  fi
+
+  if [[ -n "$saved_node_env" ]]; then
+    export NODE_ENV="$saved_node_env"
+  else
+    unset NODE_ENV || true
+  fi
+  echo "ERROR: yarn install failed in $release_dir"
+  exit 1
+}
+
+yarn_install_backend_release() {
+  local release_dir="$1"
+  # Full tree: migrations use ts-node (devDependency). Never --production.
+  patet_install_release_node_modules "$release_dir" "$API_ROOT" "full"
+}
+
+# yarn_install_frontend_release <release_dir> [production|full]
+# Default production = Windows-upload finalize (Next already built).
+# Pass full when the server must run `yarn build` (deploy.sh).
 yarn_install_frontend_release() {
   local release_dir="$1"
-  cd "$release_dir"
+  local install_mode="${2:-production}"
   remove_non_yarn_lockfiles "$release_dir"
-  yarn install --non-interactive
+  patet_install_release_node_modules "$release_dir" "$WEB_ROOT" "$install_mode"
 }
 
 # patet_prepare_uploaded_backend <release_name>
-# Symlinks shared files and runs yarn install only. Does NOT activate (no PM2/symlink/migrate).
+# Symlinks shared files and seeds/installs node_modules only. Does NOT activate (no PM2/symlink/migrate).
 patet_prepare_uploaded_backend() {
   local release_name="$1"
   local release_dir="$API_ROOT/releases/$release_name"
@@ -259,7 +428,7 @@ patet_prepare_uploaded_backend() {
 }
 
 # patet_prepare_uploaded_frontend <release_name>
-# Symlinks shared files and runs yarn install only. Does NOT activate (no PM2/symlink).
+# Symlinks shared files and seeds/installs node_modules only. Does NOT activate (no PM2/symlink).
 patet_prepare_uploaded_frontend() {
   local release_name="$1"
   local release_dir="$WEB_ROOT/releases/$release_name"

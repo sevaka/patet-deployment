@@ -76,8 +76,8 @@ deploy_backend() {
   ensure_backend_shared_env
   symlink_shared_files "$API_ROOT/shared" "$release_dir" "${BACKEND_SHARED_FILES[@]}"
 
+  yarn_install_backend_release "$release_dir"
   cd "$release_dir"
-  yarn install
 
   yarn build || build_rc=$?
   if [[ "${build_rc:-0}" -ne 0 ]]; then
@@ -124,15 +124,14 @@ deploy_frontend() {
   ensure_frontend_shared_env
   symlink_shared_files "$WEB_ROOT/shared" "$release_dir" "${FRONTEND_SHARED_FILES[@]}"
 
-  cd "$release_dir"
-  remove_non_yarn_lockfiles "$release_dir"
   rm -rf "$release_dir/.next"
 
   if [[ -n "${NEXT_BUILD_NODE_OPTIONS:-}" ]]; then
     export NODE_OPTIONS="${NEXT_BUILD_NODE_OPTIONS}"
   fi
 
-  yarn install --non-interactive
+  yarn_install_frontend_release "$release_dir" full
+  cd "$release_dir"
   export NODE_ENV=production
   yarn build || build_rc=$?
 
@@ -183,8 +182,8 @@ deploy_all() {
   git clone --branch "$API_BRANCH" --single-branch "$API_REPO" "$api_release_dir"
   ensure_backend_shared_env
   symlink_shared_files "$API_ROOT/shared" "$api_release_dir" "${BACKEND_SHARED_FILES[@]}"
+  yarn_install_backend_release "$api_release_dir"
   cd "$api_release_dir"
-  yarn install
   yarn build || backend_build_rc=$?
   if [[ "${backend_build_rc:-0}" -ne 0 ]]; then
     echo "ERROR: backend yarn build failed. Aborting."
@@ -195,13 +194,12 @@ deploy_all() {
   git clone --branch "$WEB_BRANCH" --single-branch "$WEB_REPO" "$web_release_dir"
   ensure_frontend_shared_env
   symlink_shared_files "$WEB_ROOT/shared" "$web_release_dir" "${FRONTEND_SHARED_FILES[@]}"
-  cd "$web_release_dir"
-  remove_non_yarn_lockfiles "$web_release_dir"
   rm -rf "$web_release_dir/.next"
   if [[ -n "${NEXT_BUILD_NODE_OPTIONS:-}" ]]; then
     export NODE_OPTIONS="${NEXT_BUILD_NODE_OPTIONS}"
   fi
-  yarn install --non-interactive
+  yarn_install_frontend_release "$web_release_dir" full
+  cd "$web_release_dir"
   export NODE_ENV=production
   yarn build || frontend_build_rc=$?
   if [[ "${frontend_build_rc:-0}" -ne 0 ]]; then

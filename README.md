@@ -20,7 +20,7 @@ Scripts on the VPS live under `/var/www/patet-deployment` (paths in `deploy-conf
 
 **CI / pre-deploy gate:** Nest lives on **Bitbucket** — enable Pipelines and `bitbucket-pipelines.yml` (build then `test:before-deploy`). If that step fails, do **not** deploy. Until staging DNS exists, use `https://patet.am/api/v1` and tenant `https://xx2.parcel-ops.com/api/v1`. Always run `npm run test:before-deploy` from `patet-qa-tests` on your PC before `.\deploy-patet.ps1`.
 
-**Rule:** never upload `node_modules` from Windows. Native modules (e.g. bcrypt) must be installed on Linux via `yarn install` during finalize.
+**Rule:** never upload `node_modules` from Windows. Native modules (e.g. bcrypt, sharp) must be installed on Linux. Finalize **reuses** the previous Linux `node_modules` when `yarn.lock` is unchanged; otherwise it runs `yarn install --frozen-lockfile --prefer-offline` (frontend Windows-upload also uses `--production`).
 
 ---
 
@@ -97,7 +97,7 @@ cd c:\path\to\Front_and_Back\patet-deployment
 .\deploy-commercial.ps1 -Migrate -Target all
 ```
 
-Default flow: **local build → upload → finalize on Linux** (`yarn install`, symlink `.env`, PM2 reload). Migrations run only with **`-Migrate`** or server **`--with-migrate`**.
+Default flow: **local build → upload → finalize on Linux** (reuse Linux `node_modules` or `yarn install`, symlink `.env`, PM2 reload). Migrations run only with **`-Migrate`** or server **`--with-migrate`**.
 
 **Interactive (no parameters):** run `.\deploy-patet.ps1` or `.\deploy-commercial.ps1` alone — menu:
 
@@ -116,7 +116,7 @@ Advanced: `.\deploy-from-windows.ps1 -Profile patet-am|commercial` (same as wrap
 
 | Flag | When to use |
 |------|----------------|
-| `-Target backend` / `frontend` / `all` | Ship one stack or both (demo videos are **not** uploaded) |
+| `-Target backend` / `frontend` / `all` | Ship one stack or both (demo videos are **not** uploaded). Prefer **one target** when only that stack changed — skips the other Linux install |
 | `-Target videos` | Upload demo MP4/MOV to the shared store only (no app build) |
 | `-SkipBuild` | Artifacts already built locally |
 | `-Migrate` | Run `yarn migration:run` on backend finalize |
@@ -133,7 +133,27 @@ What the script does:
 4. SSH runs `./finalize-release.sh <target> <id>` on the server, then points `current/public/assets/videos` at the shared folder (symlink only; no video upload).
 5. Demo videos upload **only** with `-Target videos` (menu option 5 / `./deploy-patet.sh videos`).
 
-**Typical cadence:** use `-SyncDeploymentScripts` when deployment scripts changed; otherwise routine deploy is just `-Target all`.
+**Typical cadence:** deploy **only the stack that changed** (`-Target backend` or `-Target frontend`). Use `-Target all` when both changed. Use `-SyncDeploymentScripts` when these deployment scripts changed.
+
+### Faster server `yarn install`
+
+Each release folder starts without `node_modules` (Windows copies are never uploaded). Finalize / `deploy.sh` now:
+
+| # | Condition | What the server does |
+|---|-----------|----------------------|
+| 1 | Previous Linux release exists and `yarn.lock` is **unchanged** | Hardlink (or copy) `current/node_modules` into the new release and **skip** `yarn install` |
+| 2 | `yarn.lock` **changed**, or no reusable `node_modules` | `yarn install --frozen-lockfile --prefer-offline --non-interactive` using the persistent Yarn cache |
+| 3 | Frontend **Windows-upload** finalize (`finalize-release.sh`) | Same as above, plus `--production` (skip ESLint/Jest/Stylelint). Backend stays a **full** install so `yarn migration:run` can use `ts-node` |
+| 4 | Frontend **server build** (`./deploy.sh frontend`) | Full install (devDependencies needed for `next build`) |
+| 5 | Yarn cache | Kept at `yarn cache dir` (usually `~/.cache/yarn`). Deploy does **not** run `yarn cache clean` |
+
+After a **Node** upgrade on the VPS, force a cold install once:
+
+```bash
+PATET_FORCE_YARN_INSTALL=1 ./finalize-release.sh frontend 2026-05-20_143022
+```
+
+Optional cache path override: `PATET_YARN_CACHE_DIR=/var/www/.yarn-cache` (leave unset to keep the existing Yarn cache).
 
 ### Demo videos (shared store)
 
@@ -330,6 +350,8 @@ Copy from `deploy.local.env.example`:
 | `PATET_LOCAL_BACKEND` | Relative or absolute path to API repo |
 | `PATET_LOCAL_FRONTEND` | Relative or absolute path to website repo |
 | `PATET_WITH_BACKEND_MIGRATE` | `1` = run migrations on finalize (default `0`; prefer `-Migrate` on Windows) |
+| `PATET_YARN_CACHE_DIR` | Persistent Yarn cache on the VPS (default: `yarn cache dir`) |
+| `PATET_FORCE_YARN_INSTALL` | `1` = skip `node_modules` reuse (Node upgrade / corrupt modules) |
 
 ---
 
@@ -406,6 +428,8 @@ ssh -p 2222 -i ~/.ssh/id_rsa root@207.154.224.28 "echo ok"
 | `UNPROTECTED PRIVATE KEY FILE` | Key readable by other Windows users | `icacls` commands in SSH section above |
 | `finalize-release.sh: command not found` | Stale/missing server scripts | `git pull` in `/var/www/patet-deployment` or `-SyncDeploymentScripts` |
 | Missing `dist` or `.next/BUILD_ID` | Local build failed or incomplete upload | Re-run without `-SkipBuild` |
+| `yarn install` `--frozen-lockfile` error | `package.json` and `yarn.lock` disagree | Fix lockfile locally, commit, redeploy |
+| Native module crash after Node upgrade | Reused `node_modules` built for the old Node | `PATET_FORCE_YARN_INSTALL=1` on finalize once |
 | Migration errors | DB/schema issue | Fix DB, `./rollback.sh backend`, redeploy without `-Migrate` / `--with-migrate` |
 | Hostname `patet-website` in `uname -a` | **Machine hostname**, not the PM2 app name | No action needed |
 
