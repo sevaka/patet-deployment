@@ -195,6 +195,44 @@ function Assert-Command([string] $Name) {
     }
 }
 
+# Windows bsdtar (System32\tar.exe) exits -1073741819 on non-ASCII names.
+# Git's GNU tar handles those paths. --force-local keeps C:\ archive paths local.
+function Resolve-PatetTar {
+    $candidates = @()
+    $gitCmd = Get-Command git -ErrorAction SilentlyContinue
+    if ($gitCmd -and $gitCmd.Source) {
+        $gitRoot = Split-Path -Parent (Split-Path -Parent $gitCmd.Source)
+        $candidates += (Join-Path $gitRoot 'usr\bin\tar.exe')
+    }
+    $candidates += @(
+        'C:\Program Files\Git\usr\bin\tar.exe',
+        'C:\Program Files (x86)\Git\usr\bin\tar.exe'
+    )
+    foreach ($candidate in $candidates) {
+        if (-not (Test-Path -LiteralPath $candidate)) { continue }
+        $gitBin = Split-Path -Parent $candidate
+        $already = $false
+        foreach ($part in ($env:PATH -split ';')) {
+            if ($part.TrimEnd('\') -eq $gitBin.TrimEnd('\')) {
+                $already = $true
+                break
+            }
+        }
+        if (-not $already) {
+            $env:PATH = "$gitBin;$env:PATH"
+        }
+        return @{
+            Exe = $candidate
+            Prefix = @('--force-local')
+        }
+    }
+    Assert-Command tar
+    return @{
+        Exe = 'tar'
+        Prefix = @()
+    }
+}
+
 function Write-UploadShaFile {
     param(
         [string] $RepoPath
@@ -558,12 +596,14 @@ function Invoke-ScpTarRelease {
         [string] $SshTarget
     )
     Write-Step "Uploading via tar+scp (rsync not available)"
-    Assert-Command tar
+    $tarCmd = Resolve-PatetTar
     Assert-DeployTransportCommands
 
     $archive = Join-Path $env:TEMP ("patet-release-{0}.tgz" -f [Guid]::NewGuid().ToString('N'))
     try {
-        $tarArgs = @('-czf', $archive)
+        $tarArgs = @()
+        $tarArgs += $tarCmd.Prefix
+        $tarArgs += '-czf', $archive
         foreach ($name in Get-PatetUploadExcludeNames) {
             $tarArgs += "--exclude=$name"
         }
@@ -574,7 +614,7 @@ function Invoke-ScpTarRelease {
 
         Write-SubStep 'Creating compressed archive (excludes node_modules, .git, .next/cache, .next/trace, *.mp4)...'
         $sw = [Diagnostics.Stopwatch]::StartNew()
-        & tar @tarArgs 2>&1 | ForEach-Object { Write-SubStep $_ }
+        & $tarCmd.Exe @tarArgs 2>&1 | ForEach-Object { Write-SubStep $_ }
         if ($LASTEXITCODE -ne 0) {
             throw "tar create failed (exit $LASTEXITCODE). Close apps locking .next (e.g. next dev) and retry."
         }
@@ -693,7 +733,7 @@ function Sync-FrontendSharedVideos {
     $sizeMb = [math]::Round($bytes / 1MB, 1)
     Write-SubStep ("Uploading {0} video(s), {1} MB (new or changed)..." -f $toUpload.Count, $sizeMb)
 
-    Assert-Command tar
+    $tarCmd = Resolve-PatetTar
     $staging = Join-Path $env:TEMP ("patet-videos-{0}" -f [Guid]::NewGuid().ToString('N'))
     $archive = Join-Path $env:TEMP ("patet-shared-videos-{0}.tgz" -f [Guid]::NewGuid().ToString('N'))
     try {
@@ -701,8 +741,10 @@ function Sync-FrontendSharedVideos {
         foreach ($file in $toUpload) {
             Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $staging $file.Name)
         }
-        $tarArgs = @('-czf', $archive, '-C', $staging, '.')
-        & tar @tarArgs
+        $tarArgs = @()
+        $tarArgs += $tarCmd.Prefix
+        $tarArgs += '-czf', $archive, '-C', $staging, '.'
+        & $tarCmd.Exe @tarArgs
         if ($LASTEXITCODE -ne 0) {
             throw "tar create failed for shared videos (exit $LASTEXITCODE)"
         }

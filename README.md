@@ -422,6 +422,7 @@ ssh -p 2222 -i ~/.ssh/id_rsa root@207.154.224.28 "echo ok"
 | `Connection refused` on SSH during deploy | WiFi blocks outbound port 22 | [SSH on an alternate port](#ssh-on-an-alternate-port-wifi-blocks-port-22); or DO Droplet Console + `./deploy.sh` on server |
 | SSH/scp **hangs until you press Enter** | OpenSSH still attached to PowerShell **stdin** | Pull latest `deploy-from-windows.ps1` (uses `ssh -n` + closed stdin for `scp`); or preflight: `ssh -n -i ... root@host "echo ok"` |
 | `rsync: not found` (WSL) | WSL without rsync | Ignore — script falls back to tar+scp; or install rsync in WSL |
+| `tar create failed (exit -1073741819)` | Windows `tar.exe` (bsdtar) crashes on non-ASCII filenames | Install Git for Windows (script prefers `Git\usr\bin\tar.exe`); or rename those files to ASCII |
 | `pipefail: invalid option name` | Shell scripts have Windows **CRLF** | On server: `sed -i 's/\r$//' /var/www/patet-deployment/*.sh`; re-run with `-SyncDeploymentScripts` |
 | `Missing command: yarn` over SSH | **nvm** not loaded in non-interactive shell | Pull latest `deploy-common.sh` (auto-loads nvm) or run finalize from a login shell |
 | `Permission denied (publickey)` | Wrong key, or `.ppk` instead of OpenSSH key | Use `PATET_SSH_EXTRA_ARGS=-i ...\id_rsa`; fix key permissions (see [SSH keys](#ssh-keys-windows--ubuntu)) |
