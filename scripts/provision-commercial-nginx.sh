@@ -57,6 +57,7 @@ server {
     ssl_session_timeout 1d;
     ssl_session_cache shared:PatetCommercialSSL:10m;
     ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 50m;
 
     location / {
         proxy_pass http://127.0.0.1:4993;
