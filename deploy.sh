@@ -132,7 +132,7 @@ deploy_frontend() {
 
   yarn_install_frontend_release "$release_dir" full
   cd "$release_dir"
-  export NODE_ENV=production
+  unset NODE_ENV || true
   yarn build || build_rc=$?
 
   if [[ "${build_rc:-0}" -ne 0 ]]; then
@@ -200,7 +200,7 @@ deploy_all() {
   fi
   yarn_install_frontend_release "$web_release_dir" full
   cd "$web_release_dir"
-  export NODE_ENV=production
+  unset NODE_ENV || true
   yarn build || frontend_build_rc=$?
   if [[ "${frontend_build_rc:-0}" -ne 0 ]]; then
     echo "ERROR: frontend yarn build failed. Aborting."

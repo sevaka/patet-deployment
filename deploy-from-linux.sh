@@ -350,8 +350,13 @@ yarn_build() {
   fi
   yarn install
   if [[ "$kind" == frontend ]]; then
-    export NODE_ENV=production
-    rm -rf .next
+    # next build sets NODE_ENV itself. Forcing production first makes Next 14
+    # look up pages/_document and fail with PageNotFoundError after compile.
+    unset NODE_ENV || true
+    if [[ -e .next ]]; then
+      log_sub "Wiping .next for a clean production build..."
+      rm -rf .next || die "Cannot wipe .next (stop 'yarn dev' / 'next dev' and retry)"
+    fi
   fi
   yarn build
   unset NODE_ENV || true

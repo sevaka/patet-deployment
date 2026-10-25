@@ -290,16 +290,24 @@ Stop the dev server, delete .next\trace manually, then retry deploy.
         }
         yarn install
         if ($Kind -eq 'frontend') {
-            $env:NODE_ENV = 'production'
+            # next build sets NODE_ENV itself. Forcing production first makes Next 14
+            # look up pages/_document and fail with PageNotFoundError after compile.
+            Remove-Item Env:NODE_ENV -ErrorAction SilentlyContinue
             $nextDir = Join-Path $RepoPath '.next'
             if (Test-Path $nextDir) {
-                Remove-Item -Recurse -Force $nextDir
+                Write-SubStep "Wiping .next for a clean production build..."
+                try {
+                    Remove-Item -LiteralPath $nextDir -Recurse -Force -ErrorAction Stop
+                }
+                catch {
+                    throw @"
+Cannot wipe .next (often locked by a running 'yarn dev' / 'next dev').
+Stop the website dev server, then retry deploy.
+"@
+                }
             }
         }
         yarn build
-        if ($Kind -eq 'frontend') {
-            Remove-Item Env:NODE_ENV -ErrorAction SilentlyContinue
-        }
         if ($Kind -eq 'backend') {
             $mainJs = Join-Path $RepoPath 'dist\src\main.js'
             if (-not (Test-Path $mainJs)) {
