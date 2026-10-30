@@ -1,3 +1,8 @@
+const clusterInstances = Math.max(
+  1,
+  parseInt(process.env.PATET_PM2_CLUSTER_INSTANCES || "2", 10) || 2
+);
+
 module.exports = {
   apps: [
 	{
@@ -6,7 +11,7 @@ module.exports = {
 	  script: "dist/src/main.js",
 	  interpreter: "node",
 	  exec_mode: "cluster",
-	  instances: 2,
+	  instances: clusterInstances,
 	  autorestart: true,
 	  max_restarts: 10,
 	  restart_delay: 2000,
@@ -23,7 +28,7 @@ module.exports = {
       args: ["start", "-p", "4993"],
       interpreter: "node",
       exec_mode: "cluster",
-      instances: 2,
+      instances: clusterInstances,
       autorestart: true,
       max_restarts: 10,
       restart_delay: 2000,

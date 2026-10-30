@@ -522,6 +522,29 @@ ensure_frontend_videos_link() {
   invoke_ssh "mkdir -p '$parent_path' '$remote_dir'; rm -rf '$link_path'; ln -sfn '$remote_dir' '$link_path'; readlink '$link_path'"
 }
 
+pm2_cluster_instances_value() {
+  local n="${PATET_PM2_CLUSTER_INSTANCES:-}"
+  [[ -z "$n" ]] && return 1
+  [[ "$n" =~ ^[1-9][0-9]*$ ]] || die "PATET_PM2_CLUSTER_INSTANCES must be a positive integer (got '$n')"
+  echo "$n"
+}
+
+persist_pm2_cluster_instances_on_server() {
+  local ssh_target="$1"
+  local deploy_root="$2"
+  local n
+  n="$(pm2_cluster_instances_value)" || return 0
+  echo "PM2 cluster size for this server: $n (writing $deploy_root/server-local.env)"
+  invoke_ssh "printf '%s\n' 'export PATET_PM2_CLUSTER_INSTANCES=$n' > '$deploy_root/server-local.env'"
+  local f
+  for f in deploy-common.sh ecosystem.config.js; do
+    [[ -f "$SCRIPT_DIR/$f" ]] || continue
+    echo "Uploading $f (PM2 cluster size $n)"
+    invoke_scp "$SCRIPT_DIR/$f" "${ssh_target}:${deploy_root}/$f"
+  done
+  invoke_ssh "perl -pi -e 's/\r\n|\r/\n/g' '$deploy_root/deploy-common.sh' 2>/dev/null || true"
+}
+
 sync_deployment_scripts() {
   local ssh_target="$1"
   local dest="${PATET_DEPLOYMENT_ROOT:-/var/www/patet-deployment}"
@@ -794,6 +817,9 @@ main() {
   echo ""
   echo "Deploy profile: $DEPLOY_PROFILE_LABEL"
   echo "SSH target:     $ssh_target"
+  if [[ -n "${PATET_PM2_CLUSTER_INSTANCES:-}" ]]; then
+    echo "PM2 instances:  $(pm2_cluster_instances_value) each (API + website)"
+  fi
   if [[ ${#FRONTEND_BUILD_ENV[@]} -gt 0 ]]; then
     echo "Frontend build: ${#FRONTEND_BUILD_ENV[@]} vars from profile (FRONTEND_BUILD_*)"
   fi
@@ -859,7 +885,12 @@ main() {
     upload_release "$frontend_local" "$web_root/releases/$release" "$ssh_target"
   fi
 
-  local finalize_cmd="cd '$deploy_root' && bash ./finalize-release.sh $TARGET $release"
+  persist_pm2_cluster_instances_on_server "$ssh_target" "$deploy_root"
+  local pm2_env_prefix=""
+  if [[ -n "${PATET_PM2_CLUSTER_INSTANCES:-}" ]]; then
+    pm2_env_prefix="PATET_PM2_CLUSTER_INSTANCES=$(pm2_cluster_instances_value) "
+  fi
+  local finalize_cmd="cd '$deploy_root' && ${pm2_env_prefix}bash ./finalize-release.sh $TARGET $release"
   [[ "$MIGRATE" == true ]] && finalize_cmd+=" --with-migrate"
   log_step "Finalizing on server"
   invoke_ssh "$finalize_cmd"

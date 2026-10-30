@@ -5,6 +5,18 @@ _DEPLOY_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=deploy-config.sh
 source "$_DEPLOY_COMMON_DIR/deploy-config.sh"
 
+# Per-VPS override (gitignored). parcel-ops sets PATET_PM2_CLUSTER_INSTANCES=1 here.
+if [[ -f "$_DEPLOY_COMMON_DIR/server-local.env" ]]; then
+  # shellcheck disable=SC1091
+  source "$_DEPLOY_COMMON_DIR/server-local.env"
+fi
+_raw_pm2_instances="${PATET_PM2_CLUSTER_INSTANCES:-2}"
+if [[ ! "$_raw_pm2_instances" =~ ^[1-9][0-9]*$ ]]; then
+  _raw_pm2_instances=2
+fi
+export PATET_PM2_CLUSTER_INSTANCES="$_raw_pm2_instances"
+unset _raw_pm2_instances
+
 # Non-interactive SSH (e.g. deploy-from-windows.ps1) does not load login profiles; nvm is common on Patet VPS.
 patet_ensure_node_in_path() {
   if command -v node >/dev/null 2>&1 && command -v yarn >/dev/null 2>&1; then
@@ -456,6 +468,7 @@ reload_backend_pm2() {
   else
     pm2 start "$PM2_ECOSYSTEM" --only patet-api --update-env
   fi
+  apply_configured_pm2_cluster_sizes
 }
 
 reload_frontend_pm2() {
@@ -464,6 +477,7 @@ reload_frontend_pm2() {
   else
     pm2 start "$PM2_ECOSYSTEM" --only patet-website --update-env
   fi
+  apply_configured_pm2_cluster_sizes
 }
 
 # patet_activate_backend_release <release_dir> <with_migrate:true|false>
@@ -921,9 +935,7 @@ cleanup_releases_keep_distinct_successful_sha() {
   done
 }
 
-# PM2 cluster instances in ecosystem.config.js (patet-api and patet-website).
-PATET_PM2_CLUSTER_INSTANCES="${PATET_PM2_CLUSTER_INSTANCES:-2}"
-
+# PM2 cluster size: PATET_PM2_CLUSTER_INSTANCES (default 2; parcel-ops profile uses 1).
 # Set by prepare_pm2_for_build; restore_pm2_cluster_sizes runs on EXIT from deploy_*.
 _PATET_PM2_SCALED_DOWN_FOR_BUILD=false
 
@@ -945,6 +957,12 @@ _pm2_scale_app_instances() {
     echo "[deploy] pm2 scale note for $name: continuing deploy (unchanged or PM2 error ignored)"
     return 0
   }
+}
+
+apply_configured_pm2_cluster_sizes() {
+  echo "[deploy] PM2 cluster size: ${PATET_PM2_CLUSTER_INSTANCES} instance(s) each"
+  _pm2_scale_app_instances patet-api "$PATET_PM2_CLUSTER_INSTANCES"
+  _pm2_scale_app_instances patet-website "$PATET_PM2_CLUSTER_INSTANCES"
 }
 
 # Scale patet-api and patet-website to 1 worker each before yarn build; restore after (or on EXIT).

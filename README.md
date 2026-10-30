@@ -333,6 +333,8 @@ Each profile has two sections:
 
 Backend commercial flags (`COMMERCIAL_MULTI_TENANT`, etc.) stay in **server** `/var/www/patet-api/shared/.env` only — not in the Windows profile.
 
+**PM2 workers:** `profiles/commercial.env` sets `PATET_PM2_CLUSTER_INSTANCES=1` (one `patet-api` + one `patet-website`). patet.am omits it and stays at **2**. Commercial deploys write `/var/www/patet-deployment/server-local.env` on that VPS so on-server `./deploy.sh` keeps the same count.
+
 ---
 
 ## `deploy.local.env` reference (legacy)
@@ -374,7 +376,8 @@ Copy from `deploy.local.env.example`:
 | `bootstrap_release_layout.sh` | One-time `releases/` + `shared/` dirs |
 | `rollback.sh` | Point `current` at older release, PM2 reload |
 | `migrate_backend.sh` | Run migrations from `current` only |
-| `ecosystem.config.js` | PM2 cluster config for API + website |
+| `ecosystem.config.js` | PM2 cluster config for API + website (`PATET_PM2_CLUSTER_INSTANCES`) |
+| `server-local.env.example` | Per-VPS PM2 worker count (copy to `server-local.env` on that droplet) |
 
 ---
 
@@ -456,9 +459,9 @@ powershell -NoProfile -Command "& { $null = [System.Management.Automation.Langua
 
 ## Backend PM2: cluster mode (`patet-api`)
 
-`ecosystem.config.js` runs **`patet-api`** in **`cluster`** mode with **`instances: 2`** so `pm2 reload` (used by `deploy.sh` and `rollback.sh`) can rotate workers one-by-one for near-zero downtime on a single host.
+`ecosystem.config.js` runs **`patet-api`** in **`cluster`** mode. Instance count is **`PATET_PM2_CLUSTER_INSTANCES`** (default **2** on patet.am so `pm2 reload` can rotate workers; **1** on parcel-ops).
 
-**RAM:** expect roughly twice the peak memory of one API process; confirm `free -h` headroom before adoption.
+**RAM:** with 2 workers, expect roughly twice the peak memory of one API process; confirm `free -h` headroom before adoption.
 
 ### One-time adoption (fork → cluster) on production
 
@@ -476,7 +479,7 @@ After this, routine deploys use `./deploy.sh backend`, which updates `/var/www/p
 
 ## Frontend PM2: cluster mode (`patet-website`)
 
-`ecosystem.config.js` runs **`patet-website`** (Next.js production server) in **`cluster`** mode with **`instances: 2`** on **`127.0.0.1:4993`**, so deploys can rotate workers without a full hard stop of every Next process at once.
+`ecosystem.config.js` runs **`patet-website`** (Next.js production server) in **`cluster`** mode on **`127.0.0.1:4993`**. Instance count follows **`PATET_PM2_CLUSTER_INSTANCES`** (2 on patet.am, 1 on parcel-ops).
 
 **Layout:** app directory is **`/var/www/patet-website/current`** (release dirs under `/var/www/patet-website/releases/…`, same symlink pattern as the API).
 
@@ -502,7 +505,7 @@ Routine deploys: `./deploy.sh frontend`.
 
 ## Build-time PM2 scale-down / scale-up (default on)
 
-Before **`yarn build`**, deploy scales **`patet-api`** and **`patet-website`** to **1** instance each (when registered in PM2). After build (or on failure via `EXIT` trap), it scales back to **2** each. If PM2 errors (e.g. `Nothing to do`), deploy **continues anyway**.
+Before **`yarn build`**, deploy scales **`patet-api`** and **`patet-website`** to **1** instance each (when registered in PM2). After build (or on failure via `EXIT` trap), it scales back to **`PATET_PM2_CLUSTER_INSTANCES`** (default **2**; parcel-ops **1**). If PM2 errors (e.g. `Nothing to do`), deploy **continues anyway**.
 
 Disable: `PATET_BUILD_SCALE_PM2_DOWN=0 ./deploy.sh frontend`
 

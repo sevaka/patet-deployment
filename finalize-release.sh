@@ -24,6 +24,7 @@ finalize_usage() {
   echo "  PATET_API_ROOT, PATET_WEB_ROOT       Override app roots (see deploy-config.sh)"
   echo "  PATET_YARN_CACHE_DIR                 Persistent Yarn cache (default: yarn cache dir)"
   echo "  PATET_FORCE_YARN_INSTALL=1           Skip node_modules reuse (Node upgrade / corrupt tree)"
+  echo "  PATET_PM2_CLUSTER_INSTANCES=N        PM2 workers for API + website (default 2; parcel-ops 1)"
 }
 
 WITH_BACKEND_MIGRATE=false

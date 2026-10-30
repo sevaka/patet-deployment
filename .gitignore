@@ -5,6 +5,7 @@ deploy.local.env
 deploy.local.commercial.env
 profiles/*.env
 !profiles/*.env.example
+server-local.env
 *.pem
 *.key
 

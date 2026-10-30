@@ -1012,6 +1012,46 @@ function Invoke-DeployInteractivePrompts {
     }
 }
 
+function Get-Pm2ClusterInstancesValue {
+    $n = $env:PATET_PM2_CLUSTER_INSTANCES
+    if ([string]::IsNullOrWhiteSpace($n)) { return $null }
+    if ($n -notmatch '^[1-9][0-9]*$') {
+        throw "PATET_PM2_CLUSTER_INSTANCES must be a positive integer (got '$n')"
+    }
+    return $n
+}
+
+function Get-RemotePm2ClusterEnvPrefix {
+    $n = Get-Pm2ClusterInstancesValue
+    if (-not $n) { return '' }
+    return "PATET_PM2_CLUSTER_INSTANCES=$n "
+}
+
+function Persist-Pm2ClusterInstancesOnServer {
+    param(
+        [string] $SshTarget,
+        [string] $DeployRoot
+    )
+    $n = Get-Pm2ClusterInstancesValue
+    if (-not $n) { return }
+
+    Write-Host "PM2 cluster size for this server: $n (writing $DeployRoot/server-local.env)"
+    $remote = @"
+printf '%s\n' 'export PATET_PM2_CLUSTER_INSTANCES=$n' > '$DeployRoot/server-local.env'
+"@
+    Invoke-DeploySsh -SshTarget $SshTarget -RemoteCommand $remote.Trim()
+
+    # Keep ecosystem + deploy-common in sync so startOrReload does not restore 2 workers.
+    $files = @('deploy-common.sh', 'ecosystem.config.js')
+    foreach ($f in $files) {
+        $local = Join-Path $DeploymentDir $f
+        if (-not (Test-Path $local)) { continue }
+        Write-Host "Uploading $f (PM2 cluster size $n)"
+        Invoke-DeployScp -LocalPath $local -RemoteSpec "${SshTarget}:${DeployRoot}/$f"
+    }
+    Invoke-Ssh "perl -pi -e 's/\r\n|\r/\n/g' '$DeployRoot/deploy-common.sh' 2>/dev/null || true"
+}
+
 function Sync-DeploymentScriptsToServer {
     param([string] $SshTarget)
     $dest = $env:PATET_DEPLOYMENT_ROOT
@@ -1066,6 +1106,10 @@ $sshTarget = "$($env:PATET_SSH_USER)@$($env:PATET_SSH_HOST)"
 Write-Host ''
 Write-Host "Deploy profile: $script:DeployProfileLabel" -ForegroundColor Green
 Write-Host "SSH target:     $sshTarget" -ForegroundColor Green
+$pm2Instances = Get-Pm2ClusterInstancesValue
+if ($pm2Instances) {
+    Write-Host "PM2 instances:  $pm2Instances each (API + website)" -ForegroundColor Green
+}
 if ($script:FrontendBuildEnv.Count -gt 0) {
     Write-Host "Frontend build: $($script:FrontendBuildEnv.Count) vars from profile (FRONTEND_BUILD_*)" -ForegroundColor Green
 }
@@ -1128,7 +1172,9 @@ if ($doFrontend) {
 $finalizeArgs = @($Target, $release)
 if ($Migrate) { $finalizeArgs += '--with-migrate' }
 
-$finalizeCmd = "cd '$deployRoot' && bash ./finalize-release.sh $($finalizeArgs -join ' ')"
+Persist-Pm2ClusterInstancesOnServer -SshTarget $sshTarget -DeployRoot $deployRoot
+$pm2EnvPrefix = Get-RemotePm2ClusterEnvPrefix
+$finalizeCmd = "cd '$deployRoot' && ${pm2EnvPrefix}bash ./finalize-release.sh $($finalizeArgs -join ' ')"
 Write-Step "Finalizing on server"
 Invoke-Ssh -RemoteCommand $finalizeCmd
 

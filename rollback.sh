@@ -274,6 +274,7 @@ rollback_one() {
   else
     pm2 startOrRestart "$PM2_ECOSYSTEM" --only "$pm2_name" --update-env
   fi
+  apply_configured_pm2_cluster_sizes
 }
 
 mark_stable() {
