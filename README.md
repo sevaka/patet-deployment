@@ -580,6 +580,21 @@ Configure **both** Xosum webhook URLs in the account (transcription + analysis) 
 
 Xosum POSTs `transcript_ready` and `analysis_ready` with `event_type`; Patet routes by that field. **Analysis completion is webhook-only** (no public get-analysis poll). For commercial (`parcel-ops.com`), use that server’s public API base in place of `api.patet.am`.
 
+### Live slideshow
+
+Set in the API shared `.env` (`/var/www/patet-api/shared/.env`):
+
+```env
+SLIDESHOW_ENABLED=true
+REDIS_URL=redis://127.0.0.1:6379
+```
+
+- **patet.am** runs **2 PM2 workers** — install Redis on the VPS and set `REDIS_URL` so Socket.IO events fan out across workers.
+- **Commercial** (often 1 worker): Redis is still recommended.
+- **nginx**: proxy `/socket.io/` with `Upgrade` / `Connection` headers to the API. See `infra/nginx-commercial-wildcard.conf.example` and pasteable `infra/nginx-slideshow-socketio.snippet.conf`. The patet.am nginx on the VPS must get the same `/socket.io/` block pointing at the API.
+- Run migration `2013800000000-CreateSlideshowTables` on **both** servers before enabling.
+- Frontend build flag: `FRONTEND_BUILD_NEXT_PUBLIC_SLIDESHOW_ENABLED=true` (profiles) → `NEXT_PUBLIC_SLIDESHOW_ENABLED` in the website build. Backend details: `patet-back-nestjs/docs/LIVE_SLIDESHOW.md`.
+
 ### API kill switch
 
 Set in `/var/www/patet-api/shared/.env`:

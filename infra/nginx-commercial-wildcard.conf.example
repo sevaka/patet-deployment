@@ -29,13 +29,30 @@ server {
     }
 
     # Same-origin API per tenant subdomain (recommended)
+    # Note: Socket.IO uses the dedicated /socket.io/ location below (Upgrade headers).
+    # Uncomment Upgrade/Connection here only if you intentionally proxy websockets under /api/.
     location /api/ {
         proxy_pass http://127.0.0.1:57303;
         proxy_http_version 1.1;
+        # proxy_set_header Upgrade $http_upgrade;
+        # proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # Live slideshow Socket.IO (namespace /slideshow, websocket transport) — needs the Upgrade headers.
+    location /socket.io/ {
+        proxy_pass http://127.0.0.1:57303;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 3600s;
     }
 
     location /fulfillment-product-images/ {
