@@ -59,6 +59,32 @@ server {
     ssl_protocols TLSv1.2 TLSv1.3;
     client_max_body_size 50m;
 
+    # LogiOps (separate stack under /logi-ops). See logiops/deployment.
+    # Do not force trailing-slash redirects (conflicts with Next basePath).
+    location /logi-ops/api/ {
+        proxy_pass http://127.0.0.1:8080/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 300s;
+        client_max_body_size 30m;
+    }
+    location /logi-ops {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 300s;
+    }
+
     location / {
         proxy_pass http://127.0.0.1:4993;
         proxy_http_version 1.1;

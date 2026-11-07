@@ -10,6 +10,7 @@ Scripts on the VPS live under `/var/www/patet-deployment` (paths in `deploy-conf
 | Deploy **patet.am** (Server 1) | Linux PC | `./deploy-patet.sh` |
 | Deploy **commercial** (Server 2, e.g. parcel-ops.com) | Windows PC | `.\deploy-commercial.ps1` |
 | Deploy **commercial** (Server 2) | Linux PC | `./deploy-commercial.sh` |
+| Deploy **LogiOps** on same Server 2 under `/logi-ops` | Windows PC | `logiops/deployment/.\deploy-logiops.ps1` (separate DB; see that repo’s `deployment/README.md`) |
 | **Pre-deploy API smoke** (from `patet-qa-tests` on your PC) | Windows PC | `cd ..\patet-qa-tests` then `npm run test:before-deploy` |
 | Build on Windows, run on Ubuntu (advanced) | Windows PC | `.\deploy-from-windows.ps1 -Profile patet-am -Target all` |
 | Build and deploy entirely on the server | Ubuntu VPS | `./deploy.sh all --with-migrate` |
