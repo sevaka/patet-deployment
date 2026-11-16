@@ -47,7 +47,10 @@ echo "==> Validating sshd config"
 sshd -t
 
 # Ubuntu 22.04+ often uses ssh.socket (systemd) — sshd_config Port alone is not enough.
-if systemctl is-active --quiet ssh.socket 2>/dev/null; then
+# With socket activation, ssh/sshd.service is inactive until a connection; only ssh.socket is active.
+SOCKET_CONFIGURED=0
+if systemctl is-active --quiet ssh.socket 2>/dev/null \
+  || systemctl is-enabled --quiet ssh.socket 2>/dev/null; then
   echo "==> Configuring ssh.socket for ports 22 and $ALT_PORT"
   mkdir -p /etc/systemd/system/ssh.socket.d
   cat >/etc/systemd/system/ssh.socket.d/patet-alt-port.conf <<EOF
@@ -58,6 +61,7 @@ ListenStream=$ALT_PORT
 EOF
   systemctl daemon-reload
   systemctl restart ssh.socket
+  SOCKET_CONFIGURED=1
 fi
 
 echo "==> Reloading SSH"
@@ -65,8 +69,11 @@ if systemctl is-active --quiet ssh; then
   systemctl restart ssh
 elif systemctl is-active --quiet sshd; then
   systemctl restart sshd
+elif [[ "$SOCKET_CONFIGURED" -eq 1 ]]; then
+  echo "==> ssh.socket already restarted (socket activation; no active ssh/sshd unit needed)"
 else
-  echo "Error: could not find active ssh/sshd service" >&2
+  echo "Error: could not find active ssh.socket / ssh / sshd" >&2
+  systemctl status ssh.socket ssh sshd --no-pager 2>&1 || true
   exit 1
 fi
 
