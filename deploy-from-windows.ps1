@@ -24,7 +24,8 @@
   Override release folder name (default: Asia/Yerevan-style timestamp yyyy-MM-dd_HHmmss).
 
 .PARAMETER SyncDeploymentScripts
-  Rsync patet-deployment scripts to PATET_DEPLOYMENT_ROOT on the server before finalize.
+  Deprecated no-op (kept for CLI compatibility). Critical deploy scripts
+  (deploy-common.sh, finalize-release.sh, …) are always uploaded before finalize.
 
 .PARAMETER ForceSyncVideos
   With -Target videos: re-upload all local public/assets/videos files even if hashes match.
@@ -827,7 +828,6 @@ function Get-DeployManualCommandLines {
         $cmd.Add($Target)
     }
     if ($Migrate) { $cmd.Add('-Migrate') }
-    if ($SyncDeploymentScripts) { $cmd.Add('-SyncDeploymentScripts') }
     if ($Target -eq 'videos' -and $ForceSyncVideos) { $cmd.Add('-ForceSyncVideos') }
     if ($SkipBuild) { $cmd.Add('-SkipBuild') }
     if ($SkipUpload) { $cmd.Add('-SkipUpload') }
@@ -869,7 +869,7 @@ function Invoke-DeployInteractiveQuick {
 
     $script:Target = $DeployTarget
     $script:Migrate = $WithMigrate
-    $script:SyncDeploymentScripts = $false
+    $script:SyncDeploymentScripts = $true
     $script:ForceSyncVideos = $false
     $script:SkipBuild = $false
     $script:SkipUpload = $false
@@ -923,11 +923,8 @@ function Invoke-DeployInteractiveDetailed {
         $script:Migrate = $false
     }
 
-    $syncPick = Read-NumberChoice -Title 'Sync deployment scripts to server before finalize?' -Options @(
-        'No',
-        'Yes (finalize-release.sh, deploy-common.sh, etc.)'
-    ) -DefaultIndex 1
-    $script:SyncDeploymentScripts = ($syncPick -eq 2)
+    # Critical scripts are always synced before finalize (see Sync-DeploymentScriptsToServer).
+    $script:SyncDeploymentScripts = $true
 
     if ($includesVideos) {
         $videoPick = Read-NumberChoice -Title 'Demo video upload mode?' -Options @(
@@ -983,7 +980,7 @@ function Invoke-DeployInteractiveDetailed {
         $modeSummary = if ($SkipUpload) { 'build only' } elseif ($SkipBuild) { 'upload + finalize' } else { 'full' }
         $videoSummary = 'skipped'
     }
-    $summary = "Target=$Target, migrations=$migrateSummary, sync scripts=$(if ($SyncDeploymentScripts) { 'yes' } else { 'no' }), videos=$videoSummary, mode=$modeSummary"
+    $summary = "Target=$Target, migrations=$migrateSummary, sync scripts=always, videos=$videoSummary, mode=$modeSummary"
     if ($ReleaseId) { $summary += ", release id=$ReleaseId" }
     Write-DeploySummary -SummaryLine $summary
 }
@@ -1128,9 +1125,7 @@ if ($doVideos) {
         throw 'Target videos cannot be combined with -SkipUpload'
     }
     Assert-DeployTransportCommands
-    if ($SyncDeploymentScripts) {
-        Sync-DeploymentScriptsToServer -SshTarget $sshTarget
-    }
+    Sync-DeploymentScriptsToServer -SshTarget $sshTarget
     Sync-FrontendSharedVideos -RepoPath $frontendLocal -WebRoot $webRoot -SshTarget $sshTarget -Force:$ForceSyncVideos
     Ensure-FrontendCurrentVideosLink -WebRoot $webRoot -SshTarget $sshTarget
     Write-Step 'Video sync finished'
@@ -1155,9 +1150,9 @@ if ($SkipUpload) {
 
 Assert-DeployTransportCommands
 
-if ($SyncDeploymentScripts) {
-    Sync-DeploymentScriptsToServer -SshTarget $sshTarget
-}
+# Always sync: stale server deploy-common.sh caused silent frontend verify failures
+# (grep+pipefail on missing commercial env keys, or single-shot curl with no retries).
+Sync-DeploymentScriptsToServer -SshTarget $sshTarget
 
 if ($doBackend) {
     $remoteBackend = "$apiRoot/releases/$release"

@@ -844,9 +844,7 @@ main() {
     require_cmd ssh
     require_cmd scp
     verify_ssh_connectivity
-    if [[ "$SYNC_SCRIPTS" == true ]]; then
-      sync_deployment_scripts "$ssh_target"
-    fi
+    sync_deployment_scripts "$ssh_target"
     sync_frontend_shared_videos "$frontend_local" "$web_root" "$ssh_target" "$FORCE_VIDEOS"
     ensure_frontend_videos_link "$web_root" "$ssh_target"
     log_step "Video sync finished"
@@ -873,9 +871,8 @@ main() {
   require_cmd scp
   verify_ssh_connectivity
 
-  if [[ "$SYNC_SCRIPTS" == true ]]; then
-    sync_deployment_scripts "$ssh_target"
-  fi
+  # Always sync: stale server deploy-common.sh caused silent frontend verify failures.
+  sync_deployment_scripts "$ssh_target"
 
   if $do_backend; then
     upload_release "$backend_local" "$api_root/releases/$release" "$ssh_target"
